@@ -15,11 +15,18 @@
 /* Configuration */
 #define SEND_INTERVAL (CLOCK_SECOND / 4)
 static linkaddr_t dest_addr = {{ 0x00, 0x12, 0x4b, 0x00, 0x0f, 0x0e, 0x6c, 0x03 }};
-
 /*---------------------------------------------------------------------------*/
 PROCESS(unicast_process, "One to One Communication");
 AUTOSTART_PROCESSES(&unicast_process);
 const int MAX_VALUES = 240;
+
+void set_tx_power(int8_t power) {
+  if (NETSTACK_RADIO.set_value(RADIO_PARAM_TXPOWER, power) == RADIO_RESULT_OK) {
+    printf("\nTX Power set to %d dBm", power);
+  } else {
+    printf("\nFailed to set TX power\n");
+  }
+}
 
 /*---------Callback executed immediately after reception---------*/
 void input_callback(const void *data, uint16_t len,
@@ -52,7 +59,7 @@ PROCESS_THREAD(unicast_process, ev, data)
       PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&periodic_timer));
       LOG_INFO("\nSending %u to ", count);
       LOG_INFO_LLADDR(&dest_addr);
-
+      set_tx_power(-21);
       NETSTACK_NETWORK.output(&dest_addr); //Packet transmission
       count++;
       time_count++;

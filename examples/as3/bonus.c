@@ -17,7 +17,7 @@
 #define TARGET_RSSI -60  // Target RSSI value in dBm
 #define DURATION (60 * CLOCK_SECOND) // 1 minute execution
 #define MAX_TXPOWER 5
-#define MIN_TXPOWER -18
+#define MIN_TXPOWER -21
 
 /*---------------------------------------------------------------------------*/
 
