@@ -63,7 +63,8 @@ PROCESS_THREAD(task2, ev, data) {
             }
             light_value = current_light;
         } else if (state == 1) {
-            if (buzz_count > 3) {
+            // First check if we've completed all cycles (4 cycles = 4 buzzes)
+            if (buzz_count >= 4) {
                 state = 0;
                 buzz_count = 0;
                 // doing the below to reset the light level after buzzing.
@@ -71,12 +72,16 @@ PROCESS_THREAD(task2, ev, data) {
                 init_opt_reading();
                 continue;
             }
+            
             etimer_set(&timer, CLOCK_SECOND * 2);
             buzzer_start(5000);
-            buzz_count++;
             PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
             buzzer_stop();
-            state = 2;
+            
+            // Increment count after buzzing
+            buzz_count++;
+            
+            state = 2;  // Always go to WAIT state after buzzing
         } else if (state == 2) {
             etimer_set(&timer, CLOCK_SECOND * 2);
             PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
