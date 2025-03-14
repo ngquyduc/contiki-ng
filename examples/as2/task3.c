@@ -44,69 +44,79 @@ PROCESS_THREAD(task3, ev, data) {
     static int state = 0; // 0: idle, 1: interim, 2: buzz, 3: wait
     static int buzz_count = 0;
     static double light_value = -1.0;
+    static int light_changed = 0; // 0 is no light changed, 1 is light changed
+    static int i = 0;
 
     PROCESS_BEGIN();
     buzzer_init();
     init_mpu_reading();
-    init_opt_reading(); // Initialize light sensor at startup
-    printf("\nThe value of CLOCK_SECOND is %d",CLOCK_SECOND);
 
     while (1) {
         if (state == 0) {
-            // Reset buzz count when entering IDLE state
-            buzz_count = 0;
-            
             etimer_set(&timer, CLOCK_SECOND / MOTION_FREQUENCY);
             PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
             double motion = get_motion();
-            printf("\nMotion: %d", (int) (motion * 100));
+            printf("\nIDLE | Motion: %d", (int) (motion * 100));
             // motion (acceleration) is 1 by default due to earth's gravity.
             if (motion > 2.0) {
+                // if there is motion change, go to INTERIM
                 state = 1;
-                // Initialize light sensor when motion is detected
-                init_opt_reading();
-                // Reset light value when transitioning to INTERIM
-                light_value = -1.0;
             }
         } else if (state == 1) {
-            etimer_set(&timer, CLOCK_SECOND / LIGHT_FREQUENCY);
-            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
-            double current_light = get_light();
-            printf("\nInterim, Current light: %d, Old light: %d", (int) (current_light * 100), (int) (light_value * 100));
-            if (light_value != -1.0 && abs(current_light - light_value) > 300) {
-                state = 2;
-                buzz_count = 0; // Reset buzz count before starting to buzz
-            }
-            light_value = current_light;
-        } else if (state == 2) {
-            etimer_set(&timer, CLOCK_SECOND * 2);
-            buzzer_start(5000);
-            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
-            buzzer_stop();
-            
-            // Increment buzz count
-            buzz_count++;
-
-            // Getting another light reading so if light changes during buzzing it stops
             init_opt_reading();
             etimer_set(&timer, CLOCK_SECOND / LIGHT_FREQUENCY);
             PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
             double current_light = get_light();
-            printf("\nBuzz, Current light: %d, Old light: %d, Buzz count: %d", 
-                  (int) (current_light * 100), (int) (light_value * 100), buzz_count);
-                  
-            // Check if we should stop buzzing (either light changed or max buzzes reached)
-            if ((light_value != -1.0 && abs(current_light - light_value) > 300) || buzz_count >= 5) {
-                state = 0;
-                light_value = -1.0; // Reset light value when returning to IDLE
-            } else {
-                state = 3;
+            printf("\nINTERIM | Current light: %d, Old light: %d", (int) (current_light * 100), (int) (light_value * 100));
+            if (light_value != -1.0 && abs(current_light - light_value) > 300) {
+                // if there is light change, go to BUZZ
+                state = 2;
             }
             light_value = current_light;
+        } else if (state == 2) {
+            buzzer_start(5000);
+            i = 0;
+            // buzz for 8 times (0.25s - 4Hz) equals 2 seconds
+            while (i < 8) {
+                i++;
+                // keep checking the light reading
+                init_opt_reading();
+                etimer_set(&timer, CLOCK_SECOND / LIGHT_FREQUENCY);
+                PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+                double current_light = get_light();
+                printf("\nBUZZ %d | Current light: %d, Old light: %d", i, (int) (current_light * 100), (int) (light_value * 100));
+                if (light_value != -1.0 && abs(current_light - light_value) > 300) {
+                    light_changed = 1;
+                }
+                light_value = current_light;
+            }
+            buzzer_stop();
+            if (light_changed == 1) {
+                // if the light change during BUZZ or WAIT, go back to IDLE
+                state = 0;
+                light_changed = 0;
+            } else {
+                // if there is no light change during BUZZ or WAIT, go to WAIT
+                state = 3;
+            }
+
         } else if (state == 3) {
             // Subtracting light reading delay to make up for the delay in state 2.
-            etimer_set(&timer, CLOCK_SECOND * 4 - CLOCK_SECOND / LIGHT_FREQUENCY);
-            PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+            i = 0;
+            // wait for 16 times (0.25s - 4Hz) equals 4 seconds
+            while (i < 16) {
+                i++;
+                // keep checking the light reading
+                init_opt_reading();
+                etimer_set(&timer, CLOCK_SECOND / LIGHT_FREQUENCY);
+                PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+                double current_light = get_light();
+                printf("\nWAIT %d | Current light: %d, Old light: %d", i, (int) (current_light * 100), (int) (light_value * 100));
+                if (light_value != -1.0 && abs(current_light - light_value) > 300) {
+                    light_changed = 1;
+                }
+                light_value = current_light;
+            }
             state = 2;
         }
     }
