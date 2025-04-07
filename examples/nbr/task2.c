@@ -159,7 +159,7 @@ char sender_scheduler(struct rtimer *t, void *ptr) {
 			nullnet_buf = (uint8_t *)&nbr_packet;
 			nullnet_len = sizeof(nbr_packet);
 
-			printf("\n NODE A | SEND PROCESS: Send neighbour discovery packet.");
+			printf("\nNODE A | SEND PROCESS: Send neighbour discovery packet.");
 			NETSTACK_NETWORK.output(&dest_addr);
 			if (i != (NUM_SEND - 1)) {
 				rtimer_set(t, RTIMER_TIME(t) + WAKE_TIME, 1, (rtimer_callback_t)sender_scheduler, ptr);
@@ -251,20 +251,20 @@ PROCESS_THREAD(sending_process, ev, data)
 	static int available_data_counter = 0;
 	
     PROCESS_BEGIN();
+
+	// Neighbor discovery
+	printf("\n/*****************************************************/");
+	printf("\nNODE A | SEND PROCESS: Start Neighbor discovery.");
+	printf("\n/*****************************************************/");
+
+	nbr_packet.src_id = node_id;
+	nullnet_set_input_callback(receive_packet_callback);
+	linkaddr_copy(&dest_addr, &linkaddr_null);
+	rtimer_set(&rt, RTIMER_NOW() + (RTIMER_SECOND / 1000), 1, (rtimer_callback_t)sender_scheduler, NULL);
     
     while(1)
     {
-		if (state == 0) {
-			// Neighbor discovery
-			printf("\n/*****************************************************/");
-			printf("\nNODE A | SEND PROCESS: Start Neighbor discovery.");
-			printf("\n/*****************************************************/");
-		
-			nbr_packet.src_id = node_id;
-			nullnet_set_input_callback(receive_packet_callback);
-			linkaddr_copy(&dest_addr, &linkaddr_null);
-	  		rtimer_set(&rt, RTIMER_NOW() + (RTIMER_SECOND / 1000), 1, (rtimer_callback_t)sender_scheduler, NULL);
-		} else if (state == 1) {
+		if (state == 1) {
 			// Check link quality
 			printf("\n/*****************************************************/");
 			printf("\nNODE A | SEND PROCESS: Check link quality.");
