@@ -1,412 +1,321 @@
-/*
- * CS4222/5422: Wireless Networking
- * Task 2: Delay-Tolerant Backhauling Network
- * 
- * This implementation creates a simple backhauling network where:
- * - Node A collects light and motion sensor data at 1Hz for 60 seconds
- * - When Node B is in proximity with good link quality, Node A transfers the data
- * - Only previously unsent readings are transmitted
- */
+#include <stdio.h>
+#include <math.h>
+#include <string.h>
 
 #include "contiki.h"
+#include "board-peripherals.h"
+#include "node-id.h"
+
+#include "lib/random.h"
+
+#include "sys/pt.h"
+#include "sys/cc.h"
+#include "sys/critical.h"
+#include "sys/etimer.h"
+
 #include "net/netstack.h"
 #include "net/nullnet/nullnet.h"
 #include "net/packetbuf.h"
-#include "lib/random.h"
 #include "net/linkaddr.h"
-#include <string.h>
-#include <stdio.h>
-#include "node-id.h"
-#include "board-peripherals.h"
 
-// Identification information of the node
-#define NODE_A_ID 1  // Change these IDs based on your actual node IDs
-#define NODE_B_ID 2
+/*****************************************************/
 
-// Configures the wake-up timer for neighbor discovery 
-#define WAKE_TIME (RTIMER_SECOND/8)    // 125ms wake time 
-#define MAX_SLEEP_CYCLE 6              // Maximum sleep cycle 
-#define MIN_SLEEP_CYCLE 2              // Minimum sleep cycle
-#define SLEEP_SLOT (RTIMER_SECOND/10)  // 100ms sleep slot
-#define NUM_SEND 3                     // Number of packets during wake time
+PROCESS(sensing_process, "Node A | SENSE process");
+PROCESS(sending_process, "NODE A | SEND PROCESS");
+AUTOSTART_PROCESSES(&sensing_process, &sending_process);
 
-// Constants for data collection
-#define SENSING_INTERVAL (CLOCK_SECOND) // 1Hz sensing rate
-#define MAX_READINGS 60                 // Store 60 seconds of data
-#define RSSI_THRESHOLD -75              // RSSI threshold for "good" link quality
-#define RSSI_SAMPLES 5                  // Number of samples to average for link quality
+/*****************************************************/
 
-// For neighbor discovery, we use the broadcast address
+typedef struct {
+	double light;
+	double motion;
+} data_tuple_struct;
+
+typedef struct {
+	unsigned long src_id;
+	unsigned long seq;
+ 	data_tuple_struct data_tuple;
+} data_packet_struct;
+
+typedef struct {
+	unsigned long src_id;
+} nbr_packet_struct;
+
+typedef struct {
+	unsigned long src_id;
+	unsigned long seq;
+} ack_packet_struct;
+
+/*****************************************************/
+
+#define NODE_A_ID 27651 // sensor #15
+#define NODE_B_ID 5489 // sensor #16
+
+/*****************************************************/
+
+#define SENSE_FREQUENCY 1 // 1 Hz
+#define SEND_FREQUENCY 1 // 1 Hz
+#define MAX_NUM_DATA 3	// 1 readings for 60 seconds // debug
+#define TIMEOUT 5 // 5 seconds
+
+/*****************************************************/
+
+#define NUM_SEND 2
+#define WAKE_TIME RTIMER_SECOND/10    // 10 HZ, 0.1s
+#define SLEEP_CYCLE 7
+#define SLEEP_SLOT RTIMER_SECOND/10
+
+/*****************************************************/
+
+static int state = 0; // 0: neighbor discovery, 1: NB done | link quality check, 2: send data
+static int data_counter = 0;
+static data_tuple_struct data_array[MAX_NUM_DATA];
+static int send_counter = 0;
+static bool send_done = false; // debug
+
+/*****************************************************/
+
 linkaddr_t dest_addr;
-
-// Data packet types
-enum {
-	PACKET_TYPE_DISCOVERY = 0,
-	PACKET_TYPE_DATA_REQUEST = 1,
-	PACKET_TYPE_DATA_RESPONSE = 2
-};
-
-// Structure for discovery packets
-typedef struct {
-	uint8_t type;            // Packet type
-	uint16_t src_id;         // Source node ID
-	uint16_t last_heard_id;  // ID of the last node heard from
-	int16_t seq;             // Sequence number
-} discovery_packet_t;
-
-// Structure for data request packets
-typedef struct {
-	uint8_t type;            // Packet type
-	uint16_t src_id;         // Source node ID
-	uint16_t last_index;     // Last index received
-} data_request_packet_t;
-
-// Structure for sensor data packets
-typedef struct {
-	uint8_t type;            // Packet type
-	uint16_t src_id;         // Source node ID
-	uint16_t start_index;    // Starting index of readings
-	uint8_t num_readings;    // Number of readings in this packet
-	uint16_t light_readings[10];  // Can send up to 10 readings per packet
-	uint16_t motion_readings[10]; // Motion readings corresponding to light readings
-} data_packet_t;
-
-// Sensor data storage
-static uint16_t light_readings[MAX_READINGS];
-static uint16_t motion_readings[MAX_READINGS];
-static uint16_t current_reading_index = 0;
-static uint16_t last_sent_index = 0;
-static uint8_t data_collection_complete = 0;
-
-// RSSI history for link quality assessment
-static int16_t rssi_history[RSSI_SAMPLES];
-static uint8_t rssi_index = 0;
-static int16_t rssi_sum = 0;
-static uint8_t rssi_count = 0;
-
-// Discovery state variables
-static uint8_t discovered_nodes[256] = {0};
-static uint16_t last_heard_node_id = 0;
-static int16_t discovery_seq = 0;
-static uint8_t ready_to_transfer = 0;
-
-// Timers
+// static linkaddr_t node_a_addr = {{ 0x00, 0x12, 0x4b, 0x00, 0x0f, 0x0e, 0x6c, 0x03 }};
+// static linkaddr_t node_b_addr = {{ 0x00, 0x12, 0x4b, 0x00, 0x12, 0x05, 0x15, 0x71 }};
 static struct rtimer rt;
-static struct etimer sensing_timer;
-static struct etimer transfer_timer;
-
-// Protothread
 static struct pt pt;
+static data_packet_struct data_packet;
+static nbr_packet_struct nbr_packet;
+static ack_packet_struct ack_packet;
+unsigned long curr_timestamp;
 
-// Process definitions
-PROCESS(task2, "task 2");
-AUTOSTART_PROCESSES(&task2);
+/*****************************************************/
 
-// Function to read the light sensor
-uint16_t read_light_sensor(void) {
-	uint16_t light_value;
-
-	SENSORS_ACTIVATE(opt_3001_sensor);
-	// Give some time for the sensor to warm up
-	etimer_set(&sensing_timer, CLOCK_SECOND / 10);
-	PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&sensing_timer));
-
-	light_value = opt_3001_sensor.value(0);
-	if (light_value != CC26XX_SENSOR_READING_ERROR) {
-		light_value = light_value / 100;  // Convert to same scale as task3
-	} else {
-		light_value = 0;  // Default value on error
-	}
-	
-	SENSORS_DEACTIVATE(opt_3001_sensor);
-
-	return light_value;
+static void init_mpu_reading(void) {
+    mpu_9250_sensor.configure(SENSORS_ACTIVE, MPU_9250_SENSOR_TYPE_ALL);
 }
 
-// Function to read the motion sensor
-uint16_t read_motion_sensor(void) {
-	uint16_t motion_value;
-
-	SENSORS_ACTIVATE(motion_sensor);
-	// Give some time for the sensor to warm up
-	etimer_set(&sensing_timer, CLOCK_SECOND / 10);
-	PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&sensing_timer));
-
-	motion_value = motion_sensor.value(0);
-	SENSORS_DEACTIVATE(motion_sensor);
-
-	return motion_value;
+static void init_opt_reading(void) {
+    SENSORS_ACTIVATE(opt_3001_sensor);
 }
 
-// Function to calculate average RSSI
-int16_t get_average_rssi(void) {
-	if (rssi_count == 0) return -127; // No samples yet
-	return rssi_sum / rssi_count;
+static double get_motion_reading(void) {
+    double x_acc = (double) mpu_9250_sensor.value(MPU_9250_SENSOR_TYPE_ACC_X) / 100;
+    double y_acc = (double) mpu_9250_sensor.value(MPU_9250_SENSOR_TYPE_ACC_Y) / 100;
+    double z_acc = (double) mpu_9250_sensor.value(MPU_9250_SENSOR_TYPE_ACC_Z) / 100;
+
+    return sqrt(x_acc * x_acc + y_acc * y_acc + z_acc * z_acc);
 }
 
-// Function to determine if link quality is good
-uint8_t is_link_quality_good(void) {
-	int16_t avg_rssi = get_average_rssi();
-	return (avg_rssi >= RSSI_THRESHOLD && rssi_count >= RSSI_SAMPLES);
+static double get_light_reading(void) {
+    int value = opt_3001_sensor.value(0);
+	init_opt_reading();
+    if (value != CC26XX_SENSOR_READING_ERROR) {
+        return (double)value / 100;
+    } else {
+        return -1.0;
+    }
 }
 
-// Function to add an RSSI sample
-void add_rssi_sample(int16_t rssi) {
-	// If buffer is full, remove oldest sample
-	if (rssi_count == RSSI_SAMPLES) {
-		rssi_sum -= rssi_history[rssi_index];
-		rssi_count--;
-	}
+/*****************************************************/
 
-	// Add new sample
-	rssi_history[rssi_index] = rssi;
-	rssi_sum += rssi;
-	rssi_count++;
-
-	// Update index for next sample
-	rssi_index = (rssi_index + 1) % RSSI_SAMPLES;
-}
-
-// Function to reset RSSI history
-void reset_rssi_history(void) {
-	rssi_index = 0;
-	rssi_sum = 0;
-	rssi_count = 0;
-}
-
-// Callback for received packets
-void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest) {
-	// Get RSSI from the received packet
-	int16_t rssi = (int16_t)packetbuf_attr(PACKETBUF_ATTR_RSSI);
-
-	// Store RSSI sample
-	add_rssi_sample(rssi);
-
-	// Check packet type
-	uint8_t packet_type = ((uint8_t*)data)[0];
-
-	switch (packet_type) {
-		case PACKET_TYPE_DISCOVERY: {
-						    if (len == sizeof(discovery_packet_t)) {
-							    discovery_packet_t *packet = (discovery_packet_t*)data;
-
-							    // Record that we discovered this node
-							    discovered_nodes[packet->src_id] = 1;
-							    last_heard_node_id = packet->src_id;
-
-							    // Print discovery information
-							    unsigned long timestamp = clock_time();
-							    printf("\n%lu DETECT %u", timestamp / CLOCK_SECOND, packet->src_id);
-
-							    // If link quality is good and we have data to send (Node A)
-							    if (node_id == NODE_A_ID && is_link_quality_good() && data_collection_complete && 
-									    last_sent_index < current_reading_index) {
-								    ready_to_transfer = 1;
-								    unsigned long timestamp = clock_time();
-								    printf("\n%lu TRANSFER %u RSSI: %d", 
-										    timestamp / CLOCK_SECOND, packet->src_id, get_average_rssi());
-							    }
-						    }
-						    break;
-					    }
-
-		case PACKET_TYPE_DATA_REQUEST: {
-						       if (len == sizeof(data_request_packet_t) && node_id == NODE_A_ID) {
-							       data_request_packet_t *request = (data_request_packet_t*)data;
-
-							       // Send data response with sensor readings
-							       data_packet_t response;
-							       response.type = PACKET_TYPE_DATA_RESPONSE;
-							       response.src_id = node_id;
-
-							       // Determine what data to send
-							       uint16_t start_index = request->last_index;
-							       uint8_t readings_to_send = (current_reading_index - start_index > 10) ? 
-								       10 : (current_reading_index - start_index);
-
-							       if (readings_to_send > 0) {
-								       response.start_index = start_index;
-								       response.num_readings = readings_to_send;
-
-								       // Copy readings
-								       for (uint8_t i = 0; i < readings_to_send; i++) {
-									       response.light_readings[i] = light_readings[start_index + i];
-									       response.motion_readings[i] = motion_readings[start_index + i];
-								       }
-
-								       // Send the response
-								       nullnet_buf = (uint8_t *)&response;
-								       nullnet_len = sizeof(data_packet_t);
-								       NETSTACK_NETWORK.output(src);
-
-								       // Update last sent index
-								       last_sent_index = start_index + readings_to_send;
-							       }
-						       }
-						       break;
-					       }
-
-		case PACKET_TYPE_DATA_RESPONSE: {
-							if (len == sizeof(data_packet_t) && node_id == NODE_B_ID) {
-								data_packet_t *response = (data_packet_t*)data;
-
-								// Print received data
-								printf("\nReceived %u light and motion readings from Node %u", 
-										response->num_readings, response->src_id);
-
-								// Print light readings
-								printf("\nLight: ");
-								for (uint8_t i = 0; i < response->num_readings; i++) {
-									printf("%u", response->light_readings[i]);
-									if (i < response->num_readings - 1) printf(", ");
-								}
-
-								// Print motion readings
-								printf("\nMotion: ");
-								for (uint8_t i = 0; i < response->num_readings; i++) {
-									printf("%u", response->motion_readings[i]);
-									if (i < response->num_readings - 1) printf(", ");
-								}
-
-								// Request next batch of data if needed
-								uint16_t last_index = response->start_index + response->num_readings;
-								if (response->num_readings == 10) {  // There might be more data
-									data_request_packet_t request;
-									request.type = PACKET_TYPE_DATA_REQUEST;
-									request.src_id = node_id;
-									request.last_index = last_index;
-
-									nullnet_buf = (uint8_t *)&request;
-									nullnet_len = sizeof(data_request_packet_t);
-									NETSTACK_NETWORK.output(src);
-								}
-							}
-							break;
-						}
+void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest) 
+{
+	if (len == sizeof(nbr_packet_struct) && state == 0) {
+		static nbr_packet_struct nbr_packet;
+		memcpy(&nbr_packet, data, len);
+		printf("\nNODE A | SEND PROCESS: Received neighbour discovery packet with rssi %d from node ID %ld", (signed short)packetbuf_attr(PACKETBUF_ATTR_RSSI), nbr_packet.src_id);
+		if (nbr_packet.src_id == NODE_B_ID) {
+			printf("\nNODE A | SEND PROCESS: Received neighbour discovery packet from Node B.");
+			linkaddr_copy(&dest_addr, src);
+			state = 1;
+		}
+	} else if (len == sizeof(nbr_packet) && state == 1) {
+		static nbr_packet_struct link_quality_packet;
+		memcpy(&link_quality_packet, data, len);
+		printf("\nNODE A | SEND PROCESS: Received link quality check packet with rssi %d from node id %ld", (signed short)packetbuf_attr(PACKETBUF_ATTR_RSSI), link_quality_packet.src_id);
+		if ((signed short) packetbuf_attr(PACKETBUF_ATTR_RSSI) > -60) {
+			printf("\nNODE A | SEND PROCESS: Link quality check passed.");
+			state = 2;
+		} else {
+			printf("\nNODE A | SEND PROCESS: Link quality check failed.");
+		}
+	} else if (len == sizeof(ack_packet) && state == 2) {
+		static ack_packet_struct ack_packet;
+		memcpy(&ack_packet, data, len);
+		if (ack_packet.seq == send_counter) {
+			printf("\nNODE A | SEND PROCESS: Received ack from Node B. Proceed to send next packet.");
+			send_counter++;
+		}
 	}
 }
 
-// Scheduler function for neighbor discovery
 char sender_scheduler(struct rtimer *t, void *ptr) {
 	static uint16_t i = 0;
-	static int sleep_cycle = 0;
+	static int NumSleep=0;
 
-	// Begin the protothread
 	PT_BEGIN(&pt);
+	curr_timestamp = clock_time();
 
-	while (1) {
-		// Turn radio on
-		NETSTACK_RADIO.on();
-
-		// Send discovery packets
+	while(1) {
+	  	NETSTACK_RADIO.on();
 		for (i = 0; i < NUM_SEND; i++) {
-			discovery_packet_t packet;
-			packet.type = PACKET_TYPE_DISCOVERY;
-			packet.src_id = node_id;
-			packet.last_heard_id = last_heard_node_id;
-			packet.seq = discovery_seq++;
+			nullnet_buf = (uint8_t *)&nbr_packet;
+			nullnet_len = sizeof(nbr_packet);
 
-			nullnet_buf = (uint8_t *)&packet;
-			nullnet_len = sizeof(discovery_packet_t);
+			printf("\n NODE A | SEND PROCESS: Send neighbour discovery packet.");
 			NETSTACK_NETWORK.output(&dest_addr);
-
-			// If Node B detected Node A with good link quality, send data request
-			if (node_id == NODE_B_ID && discovered_nodes[NODE_A_ID] && is_link_quality_good()) {
-				data_request_packet_t request;
-				request.type = PACKET_TYPE_DATA_REQUEST;
-				request.src_id = node_id;
-				request.last_index = 0;  // Start from the beginning
-
-				nullnet_buf = (uint8_t *)&request;
-				nullnet_len = sizeof(data_request_packet_t);
-				NETSTACK_NETWORK.output(&dest_addr);
+			if (i != (NUM_SEND - 1)) {
+				rtimer_set(t, RTIMER_TIME(t) + WAKE_TIME, 1, (rtimer_callback_t)sender_scheduler, ptr);
+				PT_YIELD(&pt);
 			}
-
-			// Wait between packets during wake time
-			if (i < NUM_SEND - 1) {
-				rtimer_set(t, RTIMER_TIME(t) + WAKE_TIME/NUM_SEND, 1, 
-						(rtimer_callback_t)sender_scheduler, ptr);
+	  	}
+		if (SLEEP_CYCLE != 0) {
+			NETSTACK_RADIO.off();
+			NumSleep = random_rand() % (2 * SLEEP_CYCLE + 1);
+			printf("\nNODE A | SEND PROCESS: Sleep for %d slots.", NumSleep);
+			for (i = 0; i < NumSleep; i++) {
+				rtimer_set(t, RTIMER_TIME(t) + SLEEP_SLOT, 1, (rtimer_callback_t)sender_scheduler, ptr);
 				PT_YIELD(&pt);
 			}
 		}
-
-		// Turn radio off to save power
-		NETSTACK_RADIO.off();
-
-		// Sleep for a random number of slots
-		sleep_cycle = MIN_SLEEP_CYCLE + (random_rand() % (MAX_SLEEP_CYCLE - MIN_SLEEP_CYCLE + 1));
-		printf("\nSleep for %d slots", sleep_cycle);
-
-		for (i = 0; i < sleep_cycle; i++) {
-			rtimer_set(t, RTIMER_TIME(t) + SLEEP_SLOT, 1, 
-					(rtimer_callback_t)sender_scheduler, ptr);
-			PT_YIELD(&pt);
-		}
 	}
-
 	PT_END(&pt);
 }
 
-// Main process
-PROCESS_THREAD(task2, ev, data) {
-	PROCESS_BEGIN();
 
-	// Initialize nullnet
-	nullnet_set_input_callback(receive_packet_callback);
-	linkaddr_copy(&dest_addr, &linkaddr_null);  // Use broadcast address
 
-	printf("\nBackhauling Network - Node %u", node_id);
+/*****************************************************/
 
-	// Initialize variables
-	reset_rssi_history();
-	memset(discovered_nodes, 0, sizeof(discovered_nodes));
+PROCESS_THREAD(sensing_process, ev, data)
+{
+    static struct etimer timer;
+	static int_master_status_t status;
+    
+    PROCESS_BEGIN();
+	printf("\n/*****************************************************/");
+	printf("\nNode A | SENSE PROCESS: Start sensing.");
+	printf("\n/*****************************************************/");
+	init_mpu_reading();
+	etimer_set(&timer, CLOCK_SECOND / SENSE_FREQUENCY);
+    
+    while(1)
+    {
+		PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
 
-	// Start the neighbor discovery process
-	rtimer_set(&rt, RTIMER_NOW() + (RTIMER_SECOND / 1000), 1, 
-			(rtimer_callback_t)sender_scheduler, NULL);
-
-	// If this is Node A, start collecting sensor data
-	if (node_id == NODE_A_ID) {
-		printf("\nNode A: Starting sensor data collection (1Hz for 60 seconds)");
-
-		// Initialize sensor readings array
-		for (uint16_t i = 0; i < MAX_READINGS; i++) {
-			light_readings[i] = 0;
-			motion_readings[i] = 0;
+		// Check if max number of data reached
+		status = critical_enter();
+		if (data_counter >= MAX_NUM_DATA) {
+			printf("\n/*****************************************************/");
+			printf("\nNode A | SENSE PROCESS: Max number of data reached.");
+			printf("\n/*****************************************************/");
+			critical_exit(status);
+			break;
 		}
+		
+		// Read data
+		data_tuple_struct data_tuple;
+		data_tuple.light = get_light_reading();
+		data_tuple.motion = get_motion_reading();
 
-		// Collect sensor data at 1Hz for 60 seconds
-		for (current_reading_index = 0; current_reading_index < MAX_READINGS; current_reading_index++) {
-			// Read sensors
-			light_readings[current_reading_index] = read_light_sensor();
-			motion_readings[current_reading_index] = read_motion_sensor();
+		// Store data
+        status = critical_enter();
+		data_array[data_counter] = data_tuple;
+		printf("\nNode A | SENSE PROCESS: Stored packet #%d light(%d lux) and motion(%d).", data_counter, (int) (data_tuple.light * 100), (int) (data_tuple.motion * 100));
+		data_counter++;
+        critical_exit(status);
 
-			printf("\nReading %u: Light=%u, Motion=%u", 
-					current_reading_index, 
-					light_readings[current_reading_index], 
-					motion_readings[current_reading_index]);
+        etimer_reset(&timer);
+    }
 
-			// Wait for next sensing interval
-			etimer_set(&sensing_timer, SENSING_INTERVAL);
-			PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&sensing_timer));
+	// Print out all data for debug
+	while(1) {
+		PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+		status = critical_enter();
+		if (send_done) {
+			printf("\n/*****************************************************/");
+			printf("\nNode A | SENSE PROCESS: All data sent.");
+			printf("\n| # | Light | Motion |");
+			for (int i = 0; i < MAX_NUM_DATA; i++) {
+				printf("\n| %d | %d | %d |", i, (int) (data_array[i].light * 100), (int) (data_array[i].motion * 100));
+			}
+			printf("\n/*****************************************************/");
+			break;
 		}
-
-		printf("\nNode A: Data collection complete (%u readings)", current_reading_index);
-		data_collection_complete = 1;
+        critical_exit(status);
+		etimer_reset(&timer);
 	}
+    
+    PROCESS_END();
+}
 
-	// Main loop
-	while (1) {
-		// Node A: If ready to transfer and good link quality with Node B
-		if (node_id == NODE_A_ID && ready_to_transfer) {
-			// Wait for data request from Node B (handled in callback)
-			ready_to_transfer = 0;
+PROCESS_THREAD(sending_process, ev, data)
+{
+    static struct etimer timer;
+	static int available_data_counter = 0;
+	
+    PROCESS_BEGIN();
+    
+    while(1)
+    {
+		if (state == 0) {
+			// Neighbor discovery
+			printf("\n/*****************************************************/");
+			printf("\nNODE A | SEND PROCESS: Start Neighbor discovery.");
+			printf("\n/*****************************************************/");
+		
+			nbr_packet.src_id = node_id;
+			nullnet_set_input_callback(receive_packet_callback);
+			linkaddr_copy(&dest_addr, &linkaddr_null);
+	  		rtimer_set(&rt, RTIMER_NOW() + (RTIMER_SECOND / 1000), 1, (rtimer_callback_t)sender_scheduler, NULL);
+		} else if (state == 1) {
+			// Check link quality
+			printf("\n/*****************************************************/");
+			printf("\nNODE A | SEND PROCESS: Check link quality.");
+			printf("\n/*****************************************************/");
+
+			nbr_packet.src_id = node_id;
+			nullnet_set_input_callback(receive_packet_callback);
+
+			// Send discovery packet to Node B to check link quality
+			nullnet_buf = (uint8_t *)&nbr_packet;
+			nullnet_len = sizeof(nbr_packet);
+			NETSTACK_NETWORK.output(&dest_addr);
+			printf("\nNODE A | SEND PROCESS: Send link quality check packet to Node B.");
+		} else if (state == 2) {
+			etimer_set(&timer, CLOCK_SECOND / SEND_FREQUENCY);
+			PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+
+			// Check if all data sent
+			int_master_status_t status = critical_enter();
+			if (send_counter >= MAX_NUM_DATA) {
+				send_done = true;
+				printf("\n/*****************************************************/");
+				printf("\nNODE A | SEND PROCESS: All data sent.");
+				printf("\n/*****************************************************/");
+				critical_exit(status);
+				break;
+			}
+
+			// Get the current available data counter
+			status = critical_enter();
+			available_data_counter = data_counter;
+			printf("\nNODE A | SEND PROCESS: Available data counter: %d.", available_data_counter);
+			critical_exit(status);
+			
+			while (send_counter < available_data_counter && send_counter < MAX_NUM_DATA) {
+				// Send all the current available packets
+				nullnet_set_input_callback(receive_packet_callback);
+				data_packet.data_tuple = data_array[send_counter];
+				data_packet.src_id = node_id;
+				data_packet.seq = send_counter;
+				nullnet_buf = (uint8_t *)&data_packet;
+				nullnet_len = sizeof(data_packet);
+				NETSTACK_NETWORK.output(&dest_addr);
+				printf("\nNODE A | SEND PROCESS: Sent packet #%d.", send_counter);
+				// Wait for ACK
+				etimer_set(&timer, CLOCK_SECOND * TIMEOUT);
+				PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
+				printf("\nNODE A | SEND PROCESS: Timeout for packet #%d.", send_counter);
+			}
 		}
-
-		// Short delay to avoid busy-waiting
-		etimer_set(&transfer_timer, CLOCK_SECOND / 10);
-		PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&transfer_timer));
-	}
-
-	PROCESS_END();
+    }
+    
+    PROCESS_END();
 }
