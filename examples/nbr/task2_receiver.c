@@ -93,9 +93,6 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
     // Get the current time stamp
     curr_timestamp = clock_time();
 
-    // Print the details of the received packet
-    printf("\nReceived neighbour discovery packet %lu with rssi %d from %ld at timestamp %3lu.%03lu", received_packet_data.seq, (signed short)packetbuf_attr(PACKETBUF_ATTR_RSSI), received_packet_data.src_id, curr_timestamp / CLOCK_SECOND,
-    ((curr_timestamp % CLOCK_SECOND)*1000) / CLOCK_SECOND);
     state = 1;
   }
 
@@ -104,7 +101,6 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
     state = 2;
     static data_packet_struct received_data;
     memcpy(&received_data, data, len);
-    received_rssi = (signed short)packetbuf_attr(PACKETBUF_ATTR_RSSI);
     if (received_data.seq == counter) {
       ack_packet_struct ack_packet = {data_packet.src_id, counter};
       light_data[counter] = received_data.data_tuple.light;
@@ -113,11 +109,11 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
       if (counter >= 61) {
         printf("\nLight: ");
         for (int i = 0; i < 60; i++) {
-          printf("%d.%d, ", (int)light_data[i], (int)((light_data[i] * 100) % 100));
+          printf("%d.%d, ", (int)light_data[i], ((int)(light_data[i] * 100) % 100));
         }
         printf("\nMotion: ");
         for (int i = 0; i < 60; i++) {
-          printf("%d.%d,", (int)motion_data[i], (int)((motion_data[i] * 100) % 100));
+          printf("%d.%d,", (int)motion_data[i], ((int)(motion_data[i] * 100) % 100));
         }
       }
       nullnet_buf = (uint8_t *)&ack_packet;
