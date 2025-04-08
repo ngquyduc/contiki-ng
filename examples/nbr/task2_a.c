@@ -71,16 +71,11 @@ typedef struct {
 
 /*****************************************************/
 
-static int state = 0; // 0: neighbor discovery, 1: NB done | link quality check, 2: send data
+static int state = 0; // 0: neighbor discovery, 1: link quality check, 2: send data
 static int data_counter = 0;
 static data_tuple_struct data_array[MAX_NUM_DATA];
 static int send_counter = 0;
-static bool send_done = false; // debug
-
-/*****************************************************/
-
-// static linkaddr_t node_a_addr = {{ 0x00, 0x12, 0x4b, 0x00, 0x0f, 0x0e, 0x6c, 0x03 }};
-// static linkaddr_t node_b_addr = {{ 0x00, 0x12, 0x4b, 0x00, 0x12, 0x05, 0x15, 0x71 }};
+static bool send_done = false;
 static struct rtimer rt;
 static struct pt pt;
 static data_packet_struct data_packet;
@@ -89,6 +84,7 @@ static ack_packet_struct ack_packet;
 unsigned long curr_timestamp;
 static bool both_way_discoverd = false;
 static uint8_t good_quality = 0;
+static int received_rssi = -100;
 
 /*****************************************************/
 
@@ -122,6 +118,7 @@ static double get_light_reading(void) {
 
 void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest) 
 {
+	received_rssi = (signed short)packetbuf_attr(PACKETBUF_ATTR_RSSI);
 	if (len == sizeof(nbr_packet) && state == 0) {
 		static nbr_packet_struct nbr_packet_received;
 		memcpy(&nbr_packet_received, data, len);
@@ -184,8 +181,6 @@ char sender_scheduler(struct rtimer *t, void *ptr) {
 	PT_END(&pt);
 }
 
-
-
 /*****************************************************/
 
 PROCESS_THREAD(sensing_process, ev, data)
@@ -198,6 +193,7 @@ PROCESS_THREAD(sensing_process, ev, data)
 	printf("\nNode A | SENSE PROCESS: Start sensing.");
 	printf("\n/*****************************************************/");
 	init_mpu_reading();
+	get_light_reading();
 	etimer_set(&timer, CLOCK_SECOND / SENSE_FREQUENCY);
     
     while(1)
@@ -207,9 +203,7 @@ PROCESS_THREAD(sensing_process, ev, data)
 		// Check if max number of data reached
 		status = critical_enter();
 		if (data_counter >= MAX_NUM_DATA) {
-			printf("\n/*****************************************************/");
 			printf("\nNode A | SENSE PROCESS: Max number of data reached.");
-			printf("\n/*****************************************************/");
 			critical_exit(status);
 			break;
 		}
@@ -234,13 +228,16 @@ PROCESS_THREAD(sensing_process, ev, data)
 		PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
 		status = critical_enter();
 		if (send_done) {
-			printf("\n/*****************************************************/");
-			printf("\nNode A | SENSE PROCESS: All data sent.");
-			printf("\n| # | Light | Motion |");
-			for (int i = 0; i < MAX_NUM_DATA; i++) {
-				printf("\n| %d | %d | %d |", i, (int) (data_array[i].light * 100), (int) (data_array[i].motion * 100));
+			printf("\nNODE A | SENSE PROCESS: Light: ");
+			for (int i = 0; i < MAX_NUM_DATA - 1; i++) {
+				printf("%d.%02d, ", (int)data_array[i].light, ((int)(data_array[i].light * 100) % 100));
 			}
-			printf("\n/*****************************************************/");
+			printf("%d.%02d", (int)data_array[MAX_NUM_DATA - 1].light, ((int)(data_array[MAX_NUM_DATA - 1].light * 100) % 100));
+			printf("\nNODE A | SENSE PROCESS: Motion: ");
+			for (int i = 0; i < MAX_NUM_DATA - 1; i++) {
+				printf("%d.%02d, ", (int)data_array[i].motion, ((int)(data_array[i].motion * 100) % 100));
+			}
+			printf("%d.%02d", (int)data_array[MAX_NUM_DATA - 1].motion, ((int)(data_array[MAX_NUM_DATA - 1].motion * 100) % 100));
 			break;
 		}
         critical_exit(status);
@@ -248,7 +245,7 @@ PROCESS_THREAD(sensing_process, ev, data)
 	}
     
     PROCESS_END();
-}
+}  
 
 PROCESS_THREAD(sending_process, ev, data)
 {
@@ -256,9 +253,7 @@ PROCESS_THREAD(sending_process, ev, data)
     PROCESS_BEGIN();
 
 	// Neighbor discovery
-	printf("\n/*****************************************************/");
 	printf("\nNODE A | SEND PROCESS: Start Neighbor discovery.");
-	printf("\n/*****************************************************/");
 
 	nbr_packet.src_id = node_id;
 	nullnet_set_input_callback(receive_packet_callback);
@@ -269,7 +264,8 @@ PROCESS_THREAD(sending_process, ev, data)
         PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&wait_timer));
         etimer_reset(&wait_timer);
 		if (both_way_discoverd) {
-			printf("\nNODE A | SEND PROCESS: BOTH DISCOVERED EACH OTHER.");
+			curr_timestamp = clock_time();
+			printf("\nNODE A | SEND PROCESS: %3lu DETECT %d", curr_timestamp / CLOCK_SECOND, nbr_packet.last_discovered_node_id);
 			state = 1;
 		}
     }
@@ -283,14 +279,12 @@ PROCESS_THREAD(sending_process, ev, data)
 			NETSTACK_RADIO.on();
 			// Send discovery packet to Node B to check link quality
 			printf("\nNODE A | SEND PROCESS: Check link quality.");
-			// nullnet_buf = (uint8_t *)&nbr_packet;
-			// nullnet_len = sizeof(nbr_packet);
-			// NETSTACK_NETWORK.output(&dest_addr);
 			etimer_set(&timer, CLOCK_SECOND / POLL_FREQUENCY);
 			PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
 
 			if (good_quality >= 5) {
-				printf("\nNODE A | SEND PROCESS: Link quality check passed.");
+				curr_timestamp = clock_time();
+				printf("\nNODE A | SEND PROCESS: %3lu TRANSFER %d RSSI: %d", curr_timestamp / CLOCK_SECOND, nbr_packet.last_discovered_node_id, received_rssi);
 				state = 2;
 			}
 		} 
@@ -300,9 +294,7 @@ PROCESS_THREAD(sending_process, ev, data)
 			int_master_status_t status = critical_enter();
 			if (send_counter >= MAX_NUM_DATA) {
 				send_done = true;
-				printf("\n/*****************************************************/");
 				printf("\nNODE A | SEND PROCESS: All data sent.");
-				printf("\n/*****************************************************/");
 				critical_exit(status);
 				break;
 			}
@@ -325,10 +317,6 @@ PROCESS_THREAD(sending_process, ev, data)
 				nullnet_len = sizeof(data_packet);
 				NETSTACK_NETWORK.output(&dest_addr);
 				printf("\nNODE A | SEND PROCESS: Sent packet #%d.", send_counter);
-				// Wait for ACK
-				// etimer_set(&timer, CLOCK_SECOND * TIMEOUT);
-				// PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
-				// printf("\nNODE A | SEND PROCESS: Timeout for packet #%d.", send_counter);
 			}
 		}
     }
