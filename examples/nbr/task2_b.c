@@ -1,8 +1,3 @@
-/*
- * CS4222/5422: Assignment 3b
- * Perform neighbour discovery
- */
-
 #include "contiki.h"
 #include "net/netstack.h"
 #include "net/nullnet/nullnet.h"
@@ -13,42 +8,13 @@
 #include <stdio.h>
 #include "node-id.h"
 
-// Identification information of the node
-// Configures the wake-up timer for neighbour discovery
-#define WAKE_TIME RTIMER_SECOND/10    // 10 HZ, 0.1s
+#include "defs_and_types_2.h"
 
+// Identification information of the node
 #define SLEEP_CYCLE  9        	      // 0 for never sleep
-#define SLEEP_SLOT RTIMER_SECOND/10   // sleep slot should not be too large to prevent overflow
-#define MAX_NUM_DATA 10
+
 // For neighbour discovery, we would like to send message to everyone. We use Broadcast address:
 linkaddr_t dest_addr;
-
-#define NUM_SEND 2
-/*---------------------------------------------------------------------------*/
-typedef struct {
-	unsigned short src_id;
-	unsigned short last_discovered_node_id;
-} nbr_packet_struct;
-
-typedef struct {
-	double light;
-	double motion;
-} data_tuple_struct;
-
-typedef struct {
-	unsigned long src_id;
-	unsigned long seq;
-	data_tuple_struct data_tuple;
-} data_packet_struct;
-
-typedef struct {
-	unsigned long src_id;
-	unsigned long seq;
-} ack_packet_struct;
-
-/*---------------------------------------------------------------------------*/
-// duty cycle = WAKE_TIME / (WAKE_TIME + SLEEP_SLOT * SLEEP_CYCLE)
-/*---------------------------------------------------------------------------*/
 
 // sender timer implemented using rtimer
 static struct rtimer rt;
@@ -60,8 +26,9 @@ static struct pt pt;
 static nbr_packet_struct nbr_packet;
 
 // array for received data
-static double light_data[60];
-static double motion_data[60];
+static data_tuple_struct data_array[MAX_NUM_DATA];
+// static double light_data[60];
+// static double motion_data[60];
 
 // counter for position of data and sequence number for ack
 static unsigned long counter = 0;
@@ -80,10 +47,7 @@ AUTOSTART_PROCESSES(&nbr_discovery_process);
 // Function called after reception of a packet
 void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest)
 {
-
-
 	// Check if the received packet size matches with what we expect it to be
-
 	if (len == sizeof(nbr_packet)) {
 		static nbr_packet_struct nbr_packet_received;
 
@@ -107,20 +71,21 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
 		memcpy(&received_data, data, len);
 		if (received_data.seq == counter) {
 			ack_packet_struct ack_packet = {nbr_packet.src_id, counter};
-			light_data[counter] = received_data.data_tuple.light;
-			motion_data[counter] = received_data.data_tuple.motion;
+			data_array[counter].light = received_data.data_tuple.light;
+			data_array[counter].motion = received_data.data_tuple.motion;
+			printf("\nNODE B: Received data packet with seq %ld from %ld", received_data.seq, received_data.src_id);
 			counter++;
 			if (counter == MAX_NUM_DATA) {
 				printf("\nNODE B: Light: ");
-				for (int i = 0; i < MAX_NUM_DATA - 1; i++) {
-					printf("%d.%02d, ", (int)light_data[i], ((int)(light_data[i] * 100) % 100));
-				}
-				printf("%d.%02d", (int)light_data[MAX_NUM_DATA - 1], ((int)(light_data[MAX_NUM_DATA - 1] * 100) % 100));
-				printf("\nNODE B: Motion: ");
-				for (int i = 0; i < MAX_NUM_DATA - 1; i++) {
-					printf("%d.%02d, ", (int)motion_data[i], ((int)(motion_data[i] * 100) % 100));
-				}
-				printf("%d.%02d", (int)motion_data[MAX_NUM_DATA - 1], ((int)(motion_data[MAX_NUM_DATA - 1] * 100) % 100));
+			for (int i = 0; i < MAX_NUM_DATA - 1; i++) {
+				printf("%d.%02d, ", (int)data_array[i].light, ((int)(data_array[i].light * 100) % 100));
+			}
+			printf("%d.%02d", (int)data_array[MAX_NUM_DATA - 1].light, ((int)(data_array[MAX_NUM_DATA - 1].light * 100) % 100));
+			printf("\nNODE B: Motion: ");
+			for (int i = 0; i < MAX_NUM_DATA - 1; i++) {
+				printf("%d.%02d, ", (int)data_array[i].motion, ((int)(data_array[i].motion * 100) % 100));
+			}
+			printf("%d.%02d", (int)data_array[MAX_NUM_DATA - 1].motion, ((int)(data_array[MAX_NUM_DATA - 1].motion * 100) % 100));
 			}
 			nullnet_buf = (uint8_t *)&ack_packet;
 			nullnet_len = sizeof(ack_packet);
@@ -133,12 +98,10 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
 char sender_scheduler(struct rtimer *t, void *ptr) {
 
 	static uint16_t i = 0;
-
 	static int NumSleep=0;
 
 	// Begin the protothread
 	PT_BEGIN(&pt);
-
 	// Get the current time stamp
 	curr_timestamp = clock_time();
 
@@ -157,7 +120,6 @@ char sender_scheduler(struct rtimer *t, void *ptr) {
 		NETSTACK_NETWORK.output(&dest_addr); //Packet transmission
 		rtimer_set(&rt, RTIMER_NOW() + (RTIMER_SECOND), 1, (rtimer_callback_t)sender_scheduler, ptr);
 		PT_YIELD(&pt);
-		// rtimer_set(t, RTIMER_TIME(t) + WAKE_TIME, 1, (rtimer_callback_t)sender_scheduler, ptr);
 	}
 
 	while(state == 0){
@@ -196,7 +158,6 @@ char sender_scheduler(struct rtimer *t, void *ptr) {
 			}
 		}
 	}
-
 	PT_END(&pt);
 }
 
@@ -204,21 +165,17 @@ char sender_scheduler(struct rtimer *t, void *ptr) {
 // Main thread that handles the neighbour discovery process
 PROCESS_THREAD(nbr_discovery_process, ev, data)
 {
-
 	// static struct etimer periodic_timer;
 	static struct etimer wait_timer;
 	PROCESS_BEGIN();
 
 	// initialize data packet sent for neighbour discovery exchange
 	nbr_packet.src_id = node_id; //Initialize the node ID
-				      // nbr_packet.seq = 0; //Initialize the sequence number of the packet
 
 	nullnet_set_input_callback(receive_packet_callback); //initialize receiver callback
 	linkaddr_copy(&dest_addr, &linkaddr_null);
 
-
-
-	printf("\nNODE B: CC2650 neighbour discovery");
+	printf("\nNODE B: Node %d is starting", node_id);
 	printf("\nNODE B: Node %d will be sending packet of size %d Bytes", node_id, (int)sizeof(nbr_packet_struct));
 
 	// Start sender in one millisecond.
@@ -237,7 +194,5 @@ PROCESS_THREAD(nbr_discovery_process, ev, data)
             printf("\nNODE B: Starting link quality check phase");
 		}
 	}
-
-
 	PROCESS_END();
 }

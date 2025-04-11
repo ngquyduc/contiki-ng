@@ -16,6 +16,8 @@
 #include "net/packetbuf.h"
 #include "net/linkaddr.h"
 
+#include "defs_and_types_2.h"
+
 /*****************************************************/
 
 PROCESS(sensing_process, "Node A | SENSE process");
@@ -28,46 +30,11 @@ linkaddr_t dest_addr;
 
 /*****************************************************/
 
-#define NODE_A_ID 27651 // sensor #15
-#define NODE_B_ID 5489 // sensor #16
-
-/*****************************************************/
-
 #define SENSE_FREQUENCY 1 // 1 Hz
 #define SEND_FREQUENCY 1 // 1 Hz
 #define POLL_FREQUENCY 0.2 // 0.2 Hz
-#define MAX_NUM_DATA 10	// 1 readings for 60 seconds // debug
 #define TIMEOUT 5 // 5 seconds
-
-/*****************************************************/
-
-#define NUM_SEND 2
-#define WAKE_TIME RTIMER_SECOND/10    // 10 HZ, 0.1s
 #define SLEEP_CYCLE 7
-#define SLEEP_SLOT RTIMER_SECOND/10
-
-/*****************************************************/
-
-typedef struct {
-	double light;
-	double motion;
-} data_tuple_struct;
-
-typedef struct {
-	unsigned long src_id;
-	unsigned long seq;
- 	data_tuple_struct data_tuple;
-} data_packet_struct;
-
-typedef struct {
-	unsigned short src_id;
-	unsigned short last_discovered_node_id;
-} nbr_packet_struct;
-
-typedef struct {
-	unsigned long src_id;
-	unsigned long seq;
-} ack_packet_struct;
 
 /*****************************************************/
 
@@ -133,7 +100,7 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
 		static nbr_packet_struct link_quality_packet_received;
 		memcpy(&link_quality_packet_received, data, len);
 		printf("\nNODE A | SEND PROCESS: Received link quality check packet with rssi %d from node id %d", (signed short)packetbuf_attr(PACKETBUF_ATTR_RSSI), link_quality_packet_received.src_id);
-		if ((signed short) packetbuf_attr(PACKETBUF_ATTR_RSSI) > -60) {
+		if ((signed short) packetbuf_attr(PACKETBUF_ATTR_RSSI) > LINK_QUALITY_THRESHOLD) {
 			good_quality++;
 		} else {
 			good_quality = 0;
