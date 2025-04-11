@@ -110,15 +110,17 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
 			light_data[counter] = received_data.data_tuple.light;
 			motion_data[counter] = received_data.data_tuple.motion;
 			counter++;
-			if (counter >= MAX_NUM_DATA) {
+			if (counter == MAX_NUM_DATA) {
 				printf("\nNODE B: Light: ");
-				for (int i = 0; i < MAX_NUM_DATA; i++) {
+				for (int i = 0; i < MAX_NUM_DATA - 1; i++) {
 					printf("%d.%02d, ", (int)light_data[i], ((int)(light_data[i] * 100) % 100));
 				}
+				printf("%d.%02d", (int)light_data[MAX_NUM_DATA - 1], ((int)(light_data[MAX_NUM_DATA - 1] * 100) % 100));
 				printf("\nNODE B: Motion: ");
-				for (int i = 0; i < MAX_NUM_DATA; i++) {
-					printf("%d.%02d,", (int)motion_data[i], ((int)(motion_data[i] * 100) % 100));
+				for (int i = 0; i < MAX_NUM_DATA - 1; i++) {
+					printf("%d.%02d, ", (int)motion_data[i], ((int)(motion_data[i] * 100) % 100));
 				}
+				printf("%d.%02d", (int)motion_data[MAX_NUM_DATA - 1], ((int)(motion_data[MAX_NUM_DATA - 1] * 100) % 100));
 			}
 			nullnet_buf = (uint8_t *)&ack_packet;
 			nullnet_len = sizeof(ack_packet);
@@ -129,7 +131,7 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
 
 // Scheduler function for the sender of neighbour discovery packets
 char sender_scheduler(struct rtimer *t, void *ptr) {
-	printf("\nNODE B: Scheduler called. state = %d", state);
+
 	static uint16_t i = 0;
 
 	static int NumSleep=0;
@@ -226,7 +228,8 @@ PROCESS_THREAD(nbr_discovery_process, ev, data)
         PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&wait_timer));
         etimer_reset(&wait_timer);
 		if (both_way_discoverd && state <= 1) {
-			printf("\nNODE B: BOTH DISCOVERED EACH OTHER.");
+			curr_timestamp = clock_time();
+			printf("\nNODE B: %3lu DETECT %d", curr_timestamp / CLOCK_SECOND, nbr_packet.last_discovered_node_id);
 			state = 1;
             
             // Start a new rtimer for link quality check (state 1)
