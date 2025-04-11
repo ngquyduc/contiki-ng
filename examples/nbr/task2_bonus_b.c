@@ -1,4 +1,5 @@
 #include "contiki.h"
+#include "board-peripherals.h"
 #include "net/netstack.h"
 #include "net/nullnet/nullnet.h"
 #include "net/packetbuf.h"
@@ -7,13 +8,12 @@
 #include <string.h>
 #include <stdio.h>
 #include "node-id.h"
+#include <math.h>
 
 #include "defs_and_types_2.h"
 
-#define MOTION_THRESHOLD 1.2 // move to shared file afterwards.
-
 // Identification information of the node
-#define SLEEP_CYCLE  9        	      // 0 for never sleep
+#define SLEEP_CYCLE  8    	      // 0 for never sleep
 
 // For neighbour discovery, we would like to send message to everyone. We use Broadcast address:
 linkaddr_t dest_addr;
@@ -47,6 +47,10 @@ static bool both_way_discoverd = false;
 PROCESS(nbr_discovery_process, "cc2650 neighbour discovery process");
 AUTOSTART_PROCESSES(&nbr_discovery_process);
 
+static void init_mpu_reading(void) {
+    mpu_9250_sensor.configure(SENSORS_ACTIVE, MPU_9250_SENSOR_TYPE_ALL);
+}
+
 static double get_motion_reading(void) {
     double x_acc = (double) mpu_9250_sensor.value(MPU_9250_SENSOR_TYPE_ACC_X) / 100;
     double y_acc = (double) mpu_9250_sensor.value(MPU_9250_SENSOR_TYPE_ACC_Y) / 100;
@@ -55,12 +59,17 @@ static double get_motion_reading(void) {
     return sqrt(x_acc * x_acc + y_acc * y_acc + z_acc * z_acc);
 }
 
+static bool is_significant_motion(double motion) {
+	return motion > MOTION_THRESHOLD;
+}
+
+
 // Function called after reception of a packet
 void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *src, const linkaddr_t *dest)
 {
 	// If checking for motion, no need to do anything on receive. Should never be called in this state, but just to be safe.
 	if (state == 3) {
-		return
+		return;
 	}
 
 	// Check if the received packet size matches with what we expect it to be
@@ -127,13 +136,14 @@ char sender_scheduler(struct rtimer *t, void *ptr) {
 	while(state == 3) {
 		NETSTACK_RADIO.off();
 		double motion = get_motion_reading();
-		if (motion < MOTION_THRESHOLD) {
+		printf("\nNODE B: Motion reading: %d at count %d", (int) (motion * 100), motionless_counter);
+		if (!is_significant_motion(motion)) {
 			motionless_counter++;
 		} else {
 			motionless_counter = 1;
 		}
 
-		if (motionless_counter >= 60) {
+		if (motionless_counter >= MAX_NUM_DATA) {
 			state = 0;
 			motionless_counter = 0;
 		}
@@ -191,6 +201,15 @@ char sender_scheduler(struct rtimer *t, void *ptr) {
 				PT_YIELD(&pt);
 			}
 		}
+
+		double motion = get_motion_reading();
+		if (is_significant_motion(motion)) {
+			state = 3;
+			motionless_counter = 0;
+			printf("\nNODE B: Motion detected, restarting");
+			rtimer_set(t, RTIMER_TIME(t) + SLEEP_SLOT, 1, (rtimer_callback_t)sender_scheduler, NULL);
+			break;
+		}
 	}
 	PT_END(&pt);
 }
@@ -202,6 +221,7 @@ PROCESS_THREAD(nbr_discovery_process, ev, data)
 	// static struct etimer periodic_timer;
 	static struct etimer wait_timer;
 	PROCESS_BEGIN();
+	init_mpu_reading();
 
 	// initialize data packet sent for neighbour discovery exchange
 	nbr_packet.src_id = node_id; //Initialize the node ID
@@ -214,7 +234,7 @@ PROCESS_THREAD(nbr_discovery_process, ev, data)
 
 	// Start sender in one millisecond.
 	rtimer_set(&rt, RTIMER_NOW() + (RTIMER_SECOND / 1000), 1, (rtimer_callback_t)sender_scheduler, NULL);
-	etimer_set(&wait_timer, CLOCK_SECOND * 5);
+	etimer_set(&wait_timer, CLOCK_SECOND);
 	while(1) {
         PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&wait_timer));
         etimer_reset(&wait_timer);

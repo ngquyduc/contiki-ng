@@ -51,7 +51,7 @@ static ack_packet_struct ack_packet;
 unsigned long curr_timestamp;
 static bool both_way_discoverd = false;
 static uint8_t good_quality = 0;
-static int received_rssi = -100;
+static short received_rssi = -100;
 
 /*****************************************************/
 

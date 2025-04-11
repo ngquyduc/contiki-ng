@@ -11,7 +11,7 @@
 #include "defs_and_types_2.h"
 
 // Identification information of the node
-#define SLEEP_CYCLE  9        	      // 0 for never sleep
+#define SLEEP_CYCLE  8       	      // 0 for never sleep
 
 // For neighbour discovery, we would like to send message to everyone. We use Broadcast address:
 linkaddr_t dest_addr;
