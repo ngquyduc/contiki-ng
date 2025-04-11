@@ -10,6 +10,8 @@
 
 #define MAX_NUM_DATA 60
 
+#define MOTION_FREQUENCY 10
+
 typedef struct {
 	unsigned short src_id;
 	unsigned short last_discovered_node_id;
