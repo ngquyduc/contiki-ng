@@ -276,7 +276,11 @@ PROCESS_THREAD(sending_process, ev, data)
 			
 			while (send_counter < available_data_counter && send_counter < MAX_NUM_DATA) {
 				// Send all the current available packets
-				etimer_set(&timer, CLOCK_SECOND / SEND_FREQUENCY);
+				if (available_data_counter >= MAX_NUM_DATA) {
+					etimer_set(&timer, CLOCK_SECOND / (SEND_FREQUENCY * 4));
+				} else {
+					etimer_set(&timer, CLOCK_SECOND / SEND_FREQUENCY);
+				}
 				PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
 				nullnet_set_input_callback(receive_packet_callback);
 				data_packet.data_tuple = data_array[send_counter];
