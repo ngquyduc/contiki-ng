@@ -247,6 +247,10 @@ PROCESS_THREAD(nbr_discovery_process, ev, data)
             rtimer_set(&rt, RTIMER_NOW() + (RTIMER_SECOND / 1000), 1, (rtimer_callback_t)sender_scheduler, NULL);
             printf("\nNODE B: Starting link quality check phase");
 		}
+		if (counter >= MAX_NUM_DATA) {
+			break;
+		}
 	}
+	printf("\nNODE B: FINISHED.");
 	PROCESS_END();
 }

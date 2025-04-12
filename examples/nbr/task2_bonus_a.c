@@ -215,7 +215,7 @@ PROCESS_THREAD(node_a_bonus, ev, data)
 		} else if (state == 4) {
 			while (send_counter < MAX_NUM_DATA) {
 				// Send all the current available packets
-				etimer_set(&timer, CLOCK_SECOND / SEND_FREQUENCY);
+				etimer_set(&timer, CLOCK_SECOND / (SEND_FREQUENCY * 4));
 				PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
 				nullnet_set_input_callback(receive_packet_callback);
 				data_packet.data_tuple = data_array[i];
@@ -239,6 +239,8 @@ PROCESS_THREAD(node_a_bonus, ev, data)
 			break;
 		} 
 	}
+
+	printf("\nNODE A: FINISHED.");
     
     PROCESS_END();
 }
