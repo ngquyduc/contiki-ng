@@ -100,7 +100,7 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
 		static nbr_packet_struct link_quality_packet_received;
 		memcpy(&link_quality_packet_received, data, len);
 		printf("\nNODE A | SEND PROCESS: Received link quality check packet with rssi %d from node id %d", (signed short)packetbuf_attr(PACKETBUF_ATTR_RSSI), link_quality_packet_received.src_id);
-		if ((signed short) packetbuf_attr(PACKETBUF_ATTR_RSSI) > LINK_QUALITY_THRESHOLD) {
+		if ((signed short) packetbuf_attr(PACKETBUF_ATTR_RSSI) > -60) {
 			good_quality++;
 		} else {
 			good_quality = 0;

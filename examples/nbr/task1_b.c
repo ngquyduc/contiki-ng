@@ -19,7 +19,7 @@
 // Configures the wake-up timer for neighbour discovery 
 #define WAKE_TIME RTIMER_SECOND/10    // 10 HZ, 0.1s
 
-#define SLEEP_CYCLE  9        	      // 0 for never sleep
+#define SLEEP_CYCLE  8        	      // 0 for never sleep
 #define SLEEP_SLOT RTIMER_SECOND/10   // sleep slot should not be too large to prevent overflow
 
 // For neighbour discovery, we would like to send message to everyone. We use Broadcast address:
@@ -140,7 +140,7 @@ char sender_scheduler(struct rtimer *t, void *ptr) {
 
       // get a value that is uniformly distributed between 0 and 2*SLEEP_CYCLE
       // the average is SLEEP_CYCLE 
-      NumSleep = random_rand() % (2 * SLEEP_CYCLE + 1);  
+      NumSleep = SLEEP_CYCLE;  
       printf("\nSleep for %d slots",NumSleep);
 
       // NumSleep should be a constant or static int
