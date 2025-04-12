@@ -90,7 +90,7 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
 		static nbr_packet_struct nbr_packet_received;
 		memcpy(&nbr_packet_received, data, len);
 		nbr_packet.last_discovered_node_id = nbr_packet_received.src_id;
-		printf("\nNODE A | SEND PROCESS: Received neighbour discovery packet with rssi %d from node ID %d", (signed short)packetbuf_attr(PACKETBUF_ATTR_RSSI), nbr_packet_received.src_id);
+		printf("\nNODE A | SEND PROCESS:  Received neighbour discovery packet with rssi %d from node ID %d", (signed short)packetbuf_attr(PACKETBUF_ATTR_RSSI), nbr_packet_received.src_id);
 		if (nbr_packet_received.last_discovered_node_id == node_id) {
 			linkaddr_copy(&dest_addr, src);
 			both_way_discoverd = true;
@@ -99,7 +99,7 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
 	else if (len == sizeof(nbr_packet) && state == 1) {
 		static nbr_packet_struct link_quality_packet_received;
 		memcpy(&link_quality_packet_received, data, len);
-		printf("\nNODE A | SEND PROCESS: Received link quality check packet with rssi %d from node id %d", (signed short)packetbuf_attr(PACKETBUF_ATTR_RSSI), link_quality_packet_received.src_id);
+		printf("\nNODE A | SEND PROCESS:  Received link quality check packet with rssi %d from node id %d", (signed short)packetbuf_attr(PACKETBUF_ATTR_RSSI), link_quality_packet_received.src_id);
 		if ((signed short) packetbuf_attr(PACKETBUF_ATTR_RSSI) > -60) {
 			good_quality++;
 		} else {
@@ -108,8 +108,8 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
 	} else if (len == sizeof(ack_packet) && state == 2) {
 		static ack_packet_struct ack_packet;
 		memcpy(&ack_packet, data, len);
-		if (ack_packet.seq == send_counter) {
-			printf("\nNODE A | SEND PROCESS: Received ack from Node B. Proceed to send next packet.");
+		if (ack_packet.seq == send_counter && send_counter < MAX_NUM_DATA) {
+			printf("\nNODE A | SEND PROCESS:  Received ack from Node B. Proceed to send next packet.");
 			send_counter++;
 		}
 	}
@@ -128,7 +128,7 @@ char sender_scheduler(struct rtimer *t, void *ptr) {
 			nullnet_buf = (uint8_t *)&nbr_packet;
 			nullnet_len = sizeof(nbr_packet);
 
-			printf("\nNODE A | SEND PROCESS: Send neighbour discovery packet.");
+			printf("\nNODE A | SEND PROCESS:  Send neighbour discovery packet.");
 			NETSTACK_NETWORK.output(&dest_addr);
 			if (i != (NUM_SEND - 1)) {
 				rtimer_set(t, RTIMER_TIME(t) + WAKE_TIME, 1, (rtimer_callback_t)sender_scheduler, ptr);
@@ -138,7 +138,7 @@ char sender_scheduler(struct rtimer *t, void *ptr) {
 		if (SLEEP_CYCLE != 0) {
 			NETSTACK_RADIO.off();
 			NumSleep = SLEEP_CYCLE;
-			printf("\nNODE A | SEND PROCESS: Sleep for %d slots.", NumSleep);
+			printf("\nNODE A | SEND PROCESS:  Sleep for %d slots.", NumSleep);
 			for (i = 0; i < NumSleep; i++) {
 				rtimer_set(t, RTIMER_TIME(t) + SLEEP_SLOT, 1, (rtimer_callback_t)sender_scheduler, ptr);
 				PT_YIELD(&pt);
@@ -210,6 +210,8 @@ PROCESS_THREAD(sensing_process, ev, data)
         critical_exit(status);
 		etimer_reset(&timer);
 	}
+
+	printf("\nNODE A | SENSE PROCESS: FINISHED.");
     
     PROCESS_END();
 }  
@@ -220,7 +222,7 @@ PROCESS_THREAD(sending_process, ev, data)
     PROCESS_BEGIN();
 
 	// Neighbor discovery
-	printf("\nNODE A | SEND PROCESS: Start Neighbor discovery.");
+	printf("\nNODE A | SEND PROCESS:  Start Neighbor discovery.");
 
 	nbr_packet.src_id = node_id;
 	nullnet_set_input_callback(receive_packet_callback);
@@ -232,7 +234,7 @@ PROCESS_THREAD(sending_process, ev, data)
         etimer_reset(&wait_timer);
 		if (both_way_discoverd) {
 			curr_timestamp = clock_time();
-			printf("\nNODE A | SEND PROCESS: %3lu DETECT %d", curr_timestamp / CLOCK_SECOND, nbr_packet.last_discovered_node_id);
+			printf("\nNODE A | SEND PROCESS:  %3lu DETECT %d", curr_timestamp / CLOCK_SECOND, nbr_packet.last_discovered_node_id);
 			state = 1;
 		}
     }
@@ -245,13 +247,13 @@ PROCESS_THREAD(sending_process, ev, data)
 		if (state == 1) {
 			NETSTACK_RADIO.on();
 			// Send discovery packet to Node B to check link quality
-			printf("\nNODE A | SEND PROCESS: Check link quality.");
+			printf("\nNODE A | SEND PROCESS:  Check link quality.");
 			etimer_set(&timer, CLOCK_SECOND / POLL_FREQUENCY);
 			PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
 
 			if (good_quality >= 5) {
 				curr_timestamp = clock_time();
-				printf("\nNODE A | SEND PROCESS: %3lu TRANSFER %d RSSI: %d", curr_timestamp / CLOCK_SECOND, nbr_packet.last_discovered_node_id, received_rssi);
+				printf("\nNODE A | SEND PROCESS:  %3lu TRANSFER %d RSSI: %d", curr_timestamp / CLOCK_SECOND, nbr_packet.last_discovered_node_id, received_rssi);
 				state = 2;
 			}
 		} 
@@ -261,7 +263,7 @@ PROCESS_THREAD(sending_process, ev, data)
 			int_master_status_t status = critical_enter();
 			if (send_counter >= MAX_NUM_DATA) {
 				send_done = true;
-				printf("\nNODE A | SEND PROCESS: All data sent.");
+				printf("\nNODE A | SEND PROCESS:  All data sent.");
 				critical_exit(status);
 				break;
 			}
@@ -269,7 +271,7 @@ PROCESS_THREAD(sending_process, ev, data)
 			// Get the current available data counter
 			status = critical_enter();
 			available_data_counter = data_counter;
-			printf("\nNODE A | SEND PROCESS: Available data counter: %d.", available_data_counter);
+			printf("\nNODE A | SEND PROCESS:  Available data counter: %d.", available_data_counter);
 			critical_exit(status);
 			
 			while (send_counter < available_data_counter && send_counter < MAX_NUM_DATA) {
@@ -283,10 +285,16 @@ PROCESS_THREAD(sending_process, ev, data)
 				nullnet_buf = (uint8_t *)&data_packet;
 				nullnet_len = sizeof(data_packet);
 				NETSTACK_NETWORK.output(&dest_addr);
-				printf("\nNODE A | SEND PROCESS: Sent packet #%d.", send_counter);
+				printf("\nNODE A | SEND PROCESS:  Sent packet #%d.", send_counter);
+			}
+
+			if (send_counter >= MAX_NUM_DATA) {
+				break;
 			}
 		}
     }
+
+	printf("\nNODE A | SEND PROCESS:  FINISHED.");
     
     PROCESS_END();
 }

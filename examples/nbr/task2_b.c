@@ -69,7 +69,7 @@ void receive_packet_callback(const void *data, uint16_t len, const linkaddr_t *s
 		state = 2;
 		static data_packet_struct received_data;
 		memcpy(&received_data, data, len);
-		if (received_data.seq == counter) {
+		if (received_data.seq == counter && counter < MAX_NUM_DATA) {
 			ack_packet_struct ack_packet = {nbr_packet.src_id, counter};
 			data_array[counter].light = received_data.data_tuple.light;
 			data_array[counter].motion = received_data.data_tuple.motion;
@@ -193,6 +193,11 @@ PROCESS_THREAD(nbr_discovery_process, ev, data)
             rtimer_set(&rt, RTIMER_NOW() + (RTIMER_SECOND / 1000), 1, (rtimer_callback_t)sender_scheduler, NULL);
             printf("\nNODE B: Starting link quality check phase");
 		}
+		if (counter >= MAX_NUM_DATA) {
+			break;
+		}
 	}
+
+	printf("\nNODE B: FINISHED");
 	PROCESS_END();
 }
