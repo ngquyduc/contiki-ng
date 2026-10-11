@@ -59,6 +59,8 @@
 #include "lib/list.h"
 #include "sys/cc.h"
 
+#include <inttypes.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -382,15 +384,39 @@ mqtt_decode_var_byte_int(const uint8_t *input_data_ptr,
 {
   uint8_t read_bytes = 0;
   uint8_t byte_in;
-  uint8_t multiplier = 1;
+  uint32_t multiplier = 1;
+  uint32_t value = 0;
   uint32_t input_pos_0 = 0;
 
   if(input_pos == NULL) {
     input_pos = &input_pos_0;
   }
 
+  *dest = 0;
+
+  /*
+   * A caller that has fewer bytes than it expected can compute a negative
+   * length. The bounds check below is made in the unsigned domain, where such
+   * a length would become a very large bound and admit reads past the input,
+   * so reject it here instead.
+   */
+  if(input_data_len <= 0) {
+    DBG("MQTT - No input to decode a Variable Byte Integer from\n");
+    return 0;
+  }
+
   do {
-    if(*input_pos >= input_data_len) {
+    /*
+     * A Variable Byte Integer is encoded using at most four bytes. Stop
+     * before consuming a fifth one, so that a rejected integer does not
+     * advance the parse position past the bytes it was encoded in.
+     */
+    if(read_bytes == MQTT_MAX_REMAINING_LENGTH_BYTES) {
+      DBG("MQTT - Received more than 4 byte 'Variable Byte Integer'\n");
+      return 0;
+    }
+
+    if(*input_pos >= (uint32_t)input_data_len) {
       return 0;
     }
 
@@ -402,14 +428,23 @@ mqtt_decode_var_byte_int(const uint8_t *input_data_ptr,
     read_bytes++;
     DBG("MQTT - Read Variable Byte Integer byte %i\n", byte_in);
 
-    if(read_bytes > 4) {
-      DBG("Received more than 4 byte 'Variable Byte Integer'.");
-      return 0;
-    }
-
-    *dest += (byte_in & 127) * multiplier;
+    value += (uint32_t)(byte_in & 127) * multiplier;
     multiplier *= 128;
   } while((byte_in & 128) != 0);
+
+  /*
+   * A Variable Byte Integer encodes values up to 268435455, whereas the
+   * destination holds 16 bits. Report a value that does not fit as an error
+   * rather than storing a truncated one, which would make the peer appear to
+   * have sent a much shorter packet than it did.
+   */
+  if(value > UINT16_MAX) {
+    DBG("MQTT - Variable Byte Integer %" PRIu32 " exceeds the supported "
+        "maximum of %u\n", value, (unsigned)UINT16_MAX);
+    return 0;
+  }
+
+  *dest = (uint16_t)value;
 
   return read_bytes;
 }
@@ -1031,12 +1066,6 @@ handle_connack(struct mqtt_connection *conn)
   }
 #endif
 
-  conn->out_packet.qos_state = MQTT_QOS_STATE_GOT_ACK;
-
-#if MQTT_PROTOCOL_VERSION >= MQTT_PROTOCOL_VERSION_3_1_1
-  connack_event.session_present = conn->in_packet.payload[0] & MQTT_VHDR_CONNACK_SESSION_PRESENT;
-#endif
-
 #if MQTT_PROTOCOL_VERSION >= MQTT_PROTOCOL_VERSION_5
   /* The CONNACK VHDR must contain:
    * 0: Connect Acknowledge Flags
@@ -1052,6 +1081,15 @@ handle_connack(struct mqtt_connection *conn)
     abort_connection(conn);
     return;
   }
+#endif
+
+  conn->out_packet.qos_state = MQTT_QOS_STATE_GOT_ACK;
+
+#if MQTT_PROTOCOL_VERSION >= MQTT_PROTOCOL_VERSION_3_1_1
+  connack_event.session_present = conn->in_packet.payload[0] & MQTT_VHDR_CONNACK_SESSION_PRESENT;
+#endif
+
+#if MQTT_PROTOCOL_VERSION >= MQTT_PROTOCOL_VERSION_5
   mqtt_prop_parse_connack_props(conn);
 #endif
 
@@ -1194,7 +1232,7 @@ handle_publish(struct mqtt_connection *conn)
   return MQTT_PUBLISH_OK;
 }
 /*---------------------------------------------------------------------------*/
-static void
+static int
 parse_publish_vhdr(struct mqtt_connection *conn,
                    uint32_t *pos,
                    const uint8_t *input_data_ptr,
@@ -1204,22 +1242,37 @@ parse_publish_vhdr(struct mqtt_connection *conn,
 
   /* Read out topic length */
   if(conn->in_packet.topic_len_received == 0) {
-    conn->in_packet.topic_pos = 0;
-    conn->in_packet.topic_len = (input_data_ptr[(*pos)++] << 8);
-    conn->in_packet.byte_counter++;
-    if(*pos >= input_data_len) {
-      return;
+    if(!conn->in_packet.topic_len_msb_received) {
+      conn->in_packet.topic_pos = 0;
+      conn->in_packet.topic_len = (input_data_ptr[(*pos)++] << 8);
+      conn->in_packet.byte_counter++;
+      conn->in_packet.topic_len_msb_received = 1;
+      if(*pos >= input_data_len) {
+        return 0;
+      }
     }
     conn->in_packet.topic_len |= input_data_ptr[(*pos)++];
     conn->in_packet.byte_counter++;
     conn->in_packet.topic_len_received = 1;
+    /* Reject malformed packets where the advertised topic length does
+     * not leave room for the topic itself inside remaining_length. */
+    if((uint32_t)conn->in_packet.topic_len + 2 >
+       conn->in_packet.remaining_length) {
+      PRINTF("MQTT - PUBLISH topic_len %u exceeds remaining_length %u\n",
+             conn->in_packet.topic_len, conn->in_packet.remaining_length);
+      call_event(conn, MQTT_EVENT_ERROR, NULL);
+      abort_connection(conn);
+      return -1;
+    }
     /* Abort if topic is longer than our topic buffer */
     if(conn->in_packet.topic_len > MQTT_MAX_TOPIC_LENGTH) {
-      DBG("MQTT - topic too long %u/%u\n", conn->in_packet.topic_len, MQTT_MAX_TOPIC_LENGTH);
-      return;
+      PRINTF("MQTT - PUBLISH topic too long %u/%u, aborting\n",
+             conn->in_packet.topic_len, MQTT_MAX_TOPIC_LENGTH);
+      call_event(conn, MQTT_EVENT_ERROR, NULL);
+      abort_connection(conn);
+      return -1;
     }
     DBG("MQTT - Read PUBLISH topic len %i\n", conn->in_packet.topic_len);
-    /* WARNING: Check here if TOPIC fits in payload area, otherwise error */
   }
 
   /* Read out topic */
@@ -1248,6 +1301,8 @@ parse_publish_vhdr(struct mqtt_connection *conn,
     /* Set this once per incomming publish message */
     conn->in_publish_msg.first_chunk = 1;
   }
+
+  return 0;
 }
 /*---------------------------------------------------------------------------*/
 /* MQTTv5 only */
@@ -1290,6 +1345,10 @@ handle_auth(struct mqtt_connection *conn)
 static void
 parse_vhdr(struct mqtt_connection *conn)
 {
+#if MQTT_5
+  uint16_t vhdr_len;
+#endif
+
   conn->in_packet.payload_start = conn->in_packet.payload;
 
   /* Some message types include a packet identifier */
@@ -1309,6 +1368,8 @@ parse_vhdr(struct mqtt_connection *conn)
   }
 
 #if MQTT_5
+  vhdr_len = conn->in_packet.payload_start - conn->in_packet.payload;
+
   /* CONNACK, PUBACK, PUBREC, PUBREL, PUBCOMP, DISCONNECT and AUTH have a single
    * Reason Code as part of the Variable Header.
    * SUBACK and UNSUBACK contain a list of one or more Reason Codes in the Payload.
@@ -1321,9 +1382,22 @@ parse_vhdr(struct mqtt_connection *conn)
   case MQTT_FHDR_MSG_TYPE_PUBCOMP:
   case MQTT_FHDR_MSG_TYPE_DISCONNECT:
   case MQTT_FHDR_MSG_TYPE_AUTH:
-    conn->in_packet.reason_code = conn->in_packet.payload_start[0];
+    /*
+     * The Reason Code is omitted when it is 0x00 and there are no properties,
+     * in which case the packet ends after the preceding Variable Header
+     * fields. A PUBACK acknowledging an ordinary QoS 1 publication is the
+     * common case; see Section 3.4.2.1 of the MQTT 5.0 specification. Reading
+     * a Reason Code that the peer did not send would take it from a byte that
+     * was never received.
+     */
+    if(conn->in_packet.remaining_length > vhdr_len) {
+      conn->in_packet.reason_code = conn->in_packet.payload_start[0];
+      conn->in_packet.payload_start += 1;
+      vhdr_len += 1;
+    } else {
+      conn->in_packet.reason_code = MQTT_VHDR_RC_SUCCES_OR_NORMAL;
+    }
     conn->in_packet.has_reason_code = 1;
-    conn->in_packet.payload_start += 1;
     break;
 
   default:
@@ -1331,11 +1405,37 @@ parse_vhdr(struct mqtt_connection *conn)
     break;
   }
 
-  if(!conn->in_packet.has_props) {
+  /*
+   * The Property Length is omitted along with the Reason Code, and is then
+   * taken to be zero. Decoding it in that case would read past the end of the
+   * packet as well.
+   */
+  if(!conn->in_packet.has_props &&
+     conn->in_packet.remaining_length > vhdr_len) {
     mqtt_prop_decode_input_props(conn);
   }
 #endif
 }
+/*---------------------------------------------------------------------------*/
+#if MQTT_5
+static int
+trim_publish_props(struct mqtt_connection *conn)
+{
+  uint32_t prop_total = (uint32_t)conn->in_packet.properties_len +
+                        conn->in_packet.properties_enc_len;
+
+  if(prop_total > conn->in_publish_msg.payload_chunk_length) {
+    PRINTF("MQTT - Error, PUBLISH properties length exceeds buffered chunk\n");
+    call_event(conn, MQTT_EVENT_ERROR, NULL);
+    abort_connection(conn);
+    return -1;
+  }
+
+  conn->in_publish_msg.payload_chunk_length -= prop_total;
+  conn->in_publish_msg.payload_chunk += prop_total;
+  return 0;
+}
+#endif
 /*---------------------------------------------------------------------------*/
 static int
 tcp_input(struct tcp_socket *s,
@@ -1353,11 +1453,12 @@ tcp_input(struct tcp_socket *s,
     return 0;
   }
 
+  DBG("tcp_input with %i bytes of data:\n", input_data_len);
+
+parse_next:
   if(conn->in_packet.packet_received) {
     reset_packet(&conn->in_packet);
   }
-
-  DBG("tcp_input with %i bytes of data:\n", input_data_len);
 
   /* Read the fixed header field, if we do not have it */
   if(!conn->in_packet.fhdr) {
@@ -1371,15 +1472,29 @@ tcp_input(struct tcp_socket *s,
     }
   }
 
-  /* Read the Remaining Length field, if we do not have it */
+  /*
+   * Read the Remaining Length field, if we do not have it.
+   * byte_counter intentionally does not include the VBI bytes: the inner
+   * read-loop target is MQTT_FHDR_SIZE + remaining_length, which only
+   * accounts for the message-type byte and the remaining payload.
+   */
   if(!conn->in_packet.has_remaining_length) {
     remaining_length_bytes =
       mqtt_decode_var_byte_int(input_data_ptr, input_data_len, &pos,
-                               &conn->in_packet.byte_counter,
+                               NULL,
                                &conn->in_packet.remaining_length);
 
     if(remaining_length_bytes == 0) {
+      /*
+       * The length of this packet is not known, so where the next one starts
+       * is not known either: everything that follows would be parsed as
+       * arbitrary packets. Nothing can be recovered from the connection, and
+       * the parse position cannot be resumed on the next segment, so close it
+       * and let the application reconnect on a known state.
+       */
+      PRINTF("MQTT - Error, could not decode the remaining length\n");
       call_event(conn, MQTT_EVENT_ERROR, NULL);
+      abort_connection(conn);
       return 0;
     }
 
@@ -1395,13 +1510,19 @@ tcp_input(struct tcp_socket *s,
    */
   if((conn->in_packet.remaining_length > MQTT_INPUT_BUFF_SIZE) &&
      (conn->in_packet.fhdr & 0xF0) != MQTT_FHDR_MSG_TYPE_PUBLISH) {
+    uint32_t pkt_total = MQTT_FHDR_SIZE + conn->in_packet.remaining_length;
+    uint32_t drain = MIN((uint32_t)input_data_len - pos,
+                         pkt_total - conn->in_packet.byte_counter);
 
     PRINTF("MQTT - Error, unsupported payload size for non-PUBLISH message\n");
 
-    conn->in_packet.byte_counter += input_data_len;
-    if(conn->in_packet.byte_counter >=
-       (MQTT_FHDR_SIZE + conn->in_packet.remaining_length)) {
+    pos += drain;
+    conn->in_packet.byte_counter += drain;
+    if(conn->in_packet.byte_counter >= pkt_total) {
       conn->in_packet.packet_received = 1;
+      if(pos < input_data_len) {
+        goto parse_next;
+      }
     }
     return 0;
   }
@@ -1417,12 +1538,23 @@ tcp_input(struct tcp_socket *s,
 
     if((conn->in_packet.fhdr & 0xF0) == MQTT_FHDR_MSG_TYPE_PUBLISH &&
        conn->in_packet.topic_received == 0) {
-      parse_publish_vhdr(conn, &pos, input_data_ptr, input_data_len);
+      if(parse_publish_vhdr(conn, &pos, input_data_ptr, input_data_len) < 0) {
+        return 0;
+      }
     }
 
-    /* Read in as much as we can into the packet payload */
+    /*
+     * Read in as much as we can into the packet payload, but not past
+     * the end of the current MQTT packet on the wire. Without this last
+     * bound, a TCP segment that spans the end of one packet and the
+     * start of the next would slurp the next packet's bytes into
+     * in_packet.payload[].
+     */
     copy_bytes = MIN(input_data_len - pos,
                      MQTT_INPUT_BUFF_SIZE - conn->in_packet.payload_pos);
+    copy_bytes = MIN(copy_bytes,
+                     (MQTT_FHDR_SIZE + conn->in_packet.remaining_length) -
+                     conn->in_packet.byte_counter);
     DBG("- Copied %i payload bytes\n", copy_bytes);
     memcpy(&conn->in_packet.payload[conn->in_packet.payload_pos],
            &input_data_ptr[pos],
@@ -1448,16 +1580,20 @@ tcp_input(struct tcp_socket *s,
 
 #if MQTT_5
       if(!conn->in_packet.has_props) {
+        /*
+         * The Variable Header of a PUBLISH is consumed from the input stream
+         * without being buffered, so the properties start at the first
+         * buffered byte. parse_vhdr() has not run at this point, because the
+         * packet continues past this full buffer.
+         */
+        conn->in_packet.payload_start = conn->in_packet.payload;
         mqtt_prop_decode_input_props(conn);
       }
 
       if(conn->in_publish_msg.first_chunk) {
-        conn->in_publish_msg.payload_chunk_length -= conn->in_packet.properties_len +
-          conn->in_packet.properties_enc_len;
-
-        /* Payload chunk should point past the MQTT properties and to the payload itself */
-        conn->in_publish_msg.payload_chunk += conn->in_packet.properties_len +
-          conn->in_packet.properties_enc_len;
+        if(trim_publish_props(conn) < 0) {
+          return 0;
+        }
       }
 #endif
 
@@ -1514,11 +1650,9 @@ tcp_input(struct tcp_socket *s,
     DBG("MQTT - First chunk? %i\n", conn->in_publish_msg.first_chunk);
 #if MQTT_5
     if(conn->in_publish_msg.first_chunk) {
-      conn->in_publish_msg.payload_chunk_length -= conn->in_packet.properties_len +
-        conn->in_packet.properties_enc_len;
-      /* Payload chunk should point past the MQTT properties and to the payload itself */
-      conn->in_publish_msg.payload_chunk += conn->in_packet.properties_len +
-        conn->in_packet.properties_enc_len;
+      if(trim_publish_props(conn) < 0) {
+        return 0;
+      }
     }
 #endif
     (void)handle_publish(conn);
@@ -1562,6 +1696,20 @@ tcp_input(struct tcp_socket *s,
   }
 
   conn->in_packet.packet_received = 1;
+
+  /*
+   * A handler above may have torn down the connection (e.g. an aborted
+   * CONNACK, a v5 DISCONNECT, or an application callback that disconnected).
+   * In that case the socket has been closed and unregistered, so we must not
+   * keep parsing trailing bytes of the segment into the dead connection.
+   */
+  if(conn->state == MQTT_CONN_STATE_NOT_CONNECTED) {
+    return 0;
+  }
+
+  if(pos < input_data_len) {
+    goto parse_next;
+  }
 
   return 0;
 }

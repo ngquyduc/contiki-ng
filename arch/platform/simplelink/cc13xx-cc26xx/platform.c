@@ -51,7 +51,7 @@
 #include "dev/leds.h"
 #include "dev/watchdog.h"
 #include "net/mac/framer/frame802154.h"
-#include "lib/random.h"
+#include "lib/csprng.h"
 #include "lib/sensors.h"
 /*---------------------------------------------------------------------------*/
 #include <Board.h>
@@ -208,13 +208,13 @@ platform_init_stage_two(void)
   uart0_set_callback(serial_line_input_byte);
 #endif
 
-  /* Use TRNG to seed PRNG. If TRNG fails, use a hard-coded seed. */
-  unsigned short seed = 0;
-  if(!trng_rand((uint8_t *)&seed, sizeof(seed), TRNG_WAIT_FOREVER)) {
-    /* Default to some hard-coded seed. */
-    seed = 0x1234;
+#if CSPRNG_ENABLED
+  /* Use the built-in TRNG to seed the CSPRNG */
+  struct csprng_seed seed;
+  if(trng_rand(seed.u8, sizeof(seed.u8), TRNG_WAIT_FOREVER)) {
+    csprng_feed(&seed);
   }
-  random_init(seed);
+#endif /* CSPRNG_ENABLED */
 
   /* Populate linkaddr_node_addr */
   ieee_addr_cpy_to(linkaddr_node_addr.u8, LINKADDR_SIZE);

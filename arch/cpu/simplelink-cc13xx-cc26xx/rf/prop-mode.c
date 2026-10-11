@@ -79,6 +79,10 @@
 #include <stdbool.h>
 #include <assert.h>
 /*---------------------------------------------------------------------------*/
+#if RADIO_PAYLOAD_BIT_REVERSE
+#include "lib/bitrev.h"
+#endif
+/*---------------------------------------------------------------------------*/
 /* Log configuration */
 #include "sys/log.h"
 #define LOG_MODULE "Radio"
@@ -409,6 +413,11 @@ prepare(const void *payload, unsigned short payload_len)
   }
 
   memcpy(prop_radio.tx_buf + TX_BUF_HDR_LEN, payload, payload_len);
+
+  /* Bit reverse payload for 802.15.4g compliance */
+#if RADIO_PAYLOAD_BIT_REVERSE
+  bitrev_array(prop_radio.tx_buf + TX_BUF_HDR_LEN, payload_len);
+#endif
   return 0;
 }
 /*---------------------------------------------------------------------------*/
@@ -533,6 +542,11 @@ read(void *buf, unsigned short buf_len)
   }
 
   memcpy(buf, payload_ptr, payload_len);
+
+  /* Bit reverse payload for 802.15.4g compliance */
+#if RADIO_PAYLOAD_BIT_REVERSE
+  bitrev_array(buf, payload_len);
+#endif
 
   /* RSSI stored after payload */
   prop_radio.last.rssi = (int8_t)payload_ptr[payload_len];
@@ -746,12 +760,15 @@ get_value(radio_param_t param, radio_value_t *value)
     *value = 0;
     return RADIO_RESULT_OK;
 
-  case RADIO_PARAM_TXPOWER:
-    res = rf_get_tx_power(prop_radio.rf_handle, rf_tx_power_table, (int8_t *)&value);
+  case RADIO_PARAM_TXPOWER: {
+    int8_t dbm;
+    res = rf_get_tx_power(prop_radio.rf_handle, rf_tx_power_table, &dbm);
+    *value = (radio_value_t)dbm;
     return ((res == RF_RESULT_OK) &&
-            (*value != RF_TxPowerTable_INVALID_DBM))
+            (dbm != RF_TxPowerTable_INVALID_DBM))
            ? RADIO_RESULT_OK
            : RADIO_RESULT_ERROR;
+  }
 
   case RADIO_PARAM_CCA_THRESHOLD:
     *value = prop_radio.rssi_threshold;

@@ -162,17 +162,11 @@ ifneq ($(MAKECMDGOALS),clean)
   GCC_MINOR_VERSION := $(word 2,$(subst ., ,$(GCC_VERSION)))
 
   ifeq ("$(CC)","arm-none-eabi-gcc")
-    # Silence some warnings when using GCC 12.
-    ifeq (12,$(GCC_MAJOR_VERSION))
-      # Disable -Warray-bounds false positives.
-      CFLAGS += --param=min-pagesize=0
-      # FIXME: Investigate if the warning can be re-enabled.
-      # https://www.redhat.com/en/blog/linkers-warnings-about-executable-stacks-and-segments
-      LDFLAGS += -Wl,--no-warn-rwx-segments
-    endif
-    ifeq (13,$(GCC_MAJOR_VERSION))
-      # Disable -Warray-bounds false positives. Supposed to be improved
-      # in GCC 13 (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=99578).
+    # Silence some warnings when using GCC 12 or later.
+    GCC_GEQ_12 := $(shell expr $(GCC_MAJOR_VERSION) \>= 12)
+    ifeq (1,$(GCC_GEQ_12))
+      # Disable -Warray-bounds false positives
+      # (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=99578).
       CFLAGS += --param=min-pagesize=0
       # FIXME: Investigate if the warning can be re-enabled.
       # https://www.redhat.com/en/blog/linkers-warnings-about-executable-stacks-and-segments
@@ -507,7 +501,7 @@ $(GENDIR)/%: $(GENDIR)/%.diffupdate | $(GENDIR)
 
 # Start cooja through "make file.csc", where the real target is defined through the csc.
 %.csc %.csc.gz: FORCE
-	$(Q)$(GRADLE) --no-watch-fs --parallel --build-cache -p $(COOJA_PATH) run --args="--contiki=$(realpath $(CONTIKI)) --logdir=$(CURDIR) $(addprefix $(CURDIR)/,$@)"
+	$(Q)$(GRADLE) --no-watch-fs --parallel --build-cache -p $(COOJA_PATH) run --args="$(COOJA_ARGS) --contiki=$(realpath $(CONTIKI)) --logdir=$(CURDIR) $(addprefix $(CURDIR)/,$@)"
 
 ifdef SOURCE_LDSCRIPT
 LDSCRIPT = $(OBJECTDIR)/$(notdir $(SOURCE_LDSCRIPT:.lds=.ld))

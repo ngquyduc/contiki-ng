@@ -80,6 +80,13 @@
 #include "net/ipv6/uip-ds6.h"
 #include "net/ipv6/multicast/uip-mcast6.h"
 #include "net/routing/routing.h"
+#if UIP_TCP
+#include "lib/csprng.h"
+#include "lib/random.h"
+#if CSPRNG_ENABLED
+#include "lib/aes-128.h"
+#endif /* CSPRNG_ENABLED */
+#endif /* UIP_TCP */
 
 #if UIP_ND6_SEND_NS
 #include "net/ipv6/uip-ds6-nbr.h"
@@ -212,9 +219,145 @@ struct uip_conn uip_conns[UIP_TCP_CONNS];
 /* The uip_listenports list all currently listning ports. */
 uint16_t uip_listenports[UIP_LISTENPORTS];
 
-/* The iss variable is used for the TCP initial sequence number. */
-static uint8_t iss[4];
+/*
+ * The M term of RFC 6528's ISN = M + F: an RFC 793 ISN clock advancing
+ * 250,000 per second, approximated from elapsed clock ticks.
+ */
+static uint32_t iss;
+static clock_time_t iss_last_update;
 
+#define ISS_PER_TICK (250000 / CLOCK_SECOND)
+static_assert(ISS_PER_TICK > 0, "CLOCK_SECOND too large for the ISN clock");
+
+static void
+update_iss(void)
+{
+  clock_time_t now = clock_time();
+  iss += (now - iss_last_update) * ISS_PER_TICK;
+  iss_last_update = now;
+}
+/*---------------------------------------------------------------------------*/
+#if CSPRNG_ENABLED
+static bool
+isn_prf(uint32_t *f, const uip_ipaddr_t *localipaddr,
+        const struct uip_conn *conn)
+{
+  static uint8_t secret[AES_128_KEY_LENGTH];
+  static bool secret_set;
+
+  /* Until the CSPRNG is seeded, use the fallback and retry next time. */
+  if(!secret_set) {
+    secret_set = csprng_rand(secret, sizeof(secret));
+    if(!secret_set) {
+      static bool fallback_warned;
+      if(!fallback_warned) {
+        fallback_warned = true;
+        LOG_WARN("TCP ISN: CSPRNG unseeded, using non-cryptographic ISN\n");
+      }
+      return false;
+    }
+  }
+
+  /*
+   * Fold the ports into the key by XOR (a bijection, so the key keeps
+   * the secret's full 128-bit entropy).
+   */
+  uint8_t derived_key[AES_128_KEY_LENGTH];
+  memcpy(derived_key, secret, AES_128_KEY_LENGTH);
+  derived_key[0] ^= (uint8_t)(conn->lport >> 8);
+  derived_key[1] ^= (uint8_t)(conn->lport);
+  derived_key[2] ^= (uint8_t)(conn->rport >> 8);
+  derived_key[3] ^= (uint8_t)(conn->rport);
+
+  /* CBC-MAC over the local address followed by the remote address. */
+  uint8_t block[AES_128_BLOCK_SIZE];
+  static_assert(sizeof(conn->ripaddr) == AES_128_BLOCK_SIZE,
+                "IPv6 address size must match AES-128 block size");
+  memcpy(block, localipaddr->u8, AES_128_BLOCK_SIZE);
+  AES_128.set_key(derived_key);
+  AES_128.encrypt(block);
+  for(int i = 0; i < AES_128_BLOCK_SIZE; i++) {
+    block[i] ^= conn->ripaddr.u8[i];
+  }
+  AES_128.encrypt(block);
+
+  /* Use the first 4 bytes of the AES output. */
+  *f = ((uint32_t)block[0] << 24) | ((uint32_t)block[1] << 16) |
+    ((uint32_t)block[2] << 8) | block[3];
+  return true;
+}
+#else /* CSPRNG_ENABLED */
+static bool
+isn_prf(uint32_t *f, const uip_ipaddr_t *localipaddr,
+        const struct uip_conn *conn)
+{
+  return false;
+}
+#endif /* CSPRNG_ENABLED */
+/*---------------------------------------------------------------------------*/
+/* Jenkins one-at-a-time hash rounds; isn_hash() adds the final mix. */
+static uint32_t
+isn_hash_bytes(uint32_t h, const uint8_t *data, size_t len)
+{
+  for(size_t i = 0; i < len; i++) {
+    h += data[i];
+    h += h << 10;
+    h ^= h >> 6;
+  }
+  return h;
+}
+/*---------------------------------------------------------------------------*/
+static uint32_t
+isn_hash(const uip_ipaddr_t *localipaddr, const struct uip_conn *conn)
+{
+  static uint32_t secret;
+  static bool secret_set;
+
+  if(!secret_set) {
+    secret = (uint32_t)random_rand() << 16 | random_rand();
+    secret_set = true;
+  }
+
+  uint32_t h = isn_hash_bytes(secret, localipaddr->u8, sizeof(localipaddr->u8));
+  h = isn_hash_bytes(h, conn->ripaddr.u8, sizeof(conn->ripaddr.u8));
+  h = isn_hash_bytes(h, (const uint8_t *)&conn->lport, sizeof(conn->lport));
+  h = isn_hash_bytes(h, (const uint8_t *)&conn->rport, sizeof(conn->rport));
+  h += h << 3;
+  h ^= h >> 11;
+  h += h << 15;
+  return h;
+}
+/*---------------------------------------------------------------------------*/
+/*
+ * Generate an initial sequence number as ISN = M + F (RFC 6528).
+ *
+ * With CSPRNG, F is an AES-128 CBC-MAC over the local and remote
+ * addresses, keyed by a per-boot secret with the ports folded in.
+ * Without it, F is a non-cryptographic hash over the tuple mixed with
+ * a per-boot secret from random_rand(), so it is not unpredictable.
+ *
+ * F is fixed per tuple, so a new incarnation's ISN advances with M,
+ * ahead of stale segments from the previous one.
+ */
+static void
+generate_isn(uint8_t *isn_out, const uip_ipaddr_t *localipaddr,
+             const struct uip_conn *conn)
+{
+  update_iss();
+
+  uint32_t f;
+  if(!isn_prf(&f, localipaddr, conn)) {
+    f = isn_hash(localipaddr, conn);
+  }
+  uint32_t isn = iss + f;
+
+  /* Write ISN in network byte order. */
+  isn_out[0] = (uint8_t)(isn >> 24);
+  isn_out[1] = (uint8_t)(isn >> 16);
+  isn_out[2] = (uint8_t)(isn >> 8);
+  isn_out[3] = (uint8_t)(isn);
+}
+/*---------------------------------------------------------------------------*/
 /* Temporary variables. */
 uint8_t uip_acc32[4];
 #endif /* UIP_TCP */
@@ -273,6 +416,47 @@ uip_add32(uint8_t *op32, uint16_t op16)
       }
     }
   }
+}
+
+/*---------------------------------------------------------------------------*/
+/* TCP sequence number and window validation functions */
+static inline uint32_t
+seq_to_uint32(uint8_t *seq)
+{
+  return ((uint32_t)seq[0] << 24) | ((uint32_t)seq[1] << 16) |
+         ((uint32_t)seq[2] << 8) | seq[3];
+}
+
+/*
+ * Segment acceptability test per RFC 9293 Section 3.10.7.4, Table 6.
+ *
+ * A segment is acceptable if any part of it falls within the receive
+ * window. For segments with data, this means either the beginning or
+ * end of the segment must be in [RCV.NXT, RCV.NXT + RCV.WND).
+ */
+static inline int
+seg_in_window(uint8_t *seq, uint16_t seg_len, uint8_t *rcv_nxt,
+              uint16_t window)
+{
+  int32_t start_diff = (int32_t)(seq_to_uint32(seq) - seq_to_uint32(rcv_nxt));
+
+  if(seg_len == 0) {
+    if(window == 0) {
+      return start_diff == 0;
+    }
+    return start_diff >= 0 && start_diff < (int32_t)window;
+  }
+
+  if(window == 0) {
+    return 0;
+  }
+
+  /* SEG.LEN > 0, RCV.WND > 0: accept if beginning OR end is in window */
+  if(start_diff >= 0 && start_diff < (int32_t)window) {
+    return 1;
+  }
+  int32_t end_diff = start_diff + (int32_t)(seg_len - 1);
+  return end_diff >= 0 && end_diff < (int32_t)window;
 }
 #endif /* UIP_TCP */
 
@@ -461,11 +645,6 @@ uip_connect(const uip_ipaddr_t *ripaddr, uint16_t rport)
 
   conn->tcpstateflags = UIP_SYN_SENT;
 
-  conn->snd_nxt[0] = iss[0];
-  conn->snd_nxt[1] = iss[1];
-  conn->snd_nxt[2] = iss[2];
-  conn->snd_nxt[3] = iss[3];
-
   conn->rcv_nxt[0] = 0;
   conn->rcv_nxt[1] = 0;
   conn->rcv_nxt[2] = 0;
@@ -482,6 +661,11 @@ uip_connect(const uip_ipaddr_t *ripaddr, uint16_t rport)
   conn->lport = uip_htons(lastport);
   conn->rport = rport;
   uip_ipaddr_copy(&conn->ripaddr, ripaddr);
+
+  /* The ISN depends on the full tuple, so generate it last. */
+  uip_ipaddr_t localipaddr;
+  uip_ds6_select_src(&localipaddr, &conn->ripaddr);
+  generate_isn(conn->snd_nxt, &localipaddr, conn);
 
   return conn;
 }
@@ -593,7 +777,12 @@ uip_listen(uint16_t port)
 
 static uint8_t uip_reassbuf[UIP_REASS_BUFSIZE];
 
-static uint8_t uip_reassbitmap[UIP_REASS_BUFSIZE / (8 * 8)];
+/* One bit per 8 bytes, i.e. one byte per 64 bytes of the reassembly
+   buffer. Round the element count up so the bitmap covers the whole
+   buffer even when UIP_REASS_BUFSIZE is not a multiple of 64; otherwise
+   integer division would truncate the last partial block and let
+   (offset + len) >> 6 index one element past the end. */
+static uint8_t uip_reassbitmap[(UIP_REASS_BUFSIZE + (8 * 8) - 1) / (8 * 8)];
 /*the first byte of an IP fragment is aligned on an 8-byte boundary */
 
 static const uint8_t bitmap_bits[8] = {0xff, 0x7f, 0x3f, 0x1f,
@@ -677,9 +866,14 @@ uip_reass(uint8_t *prev_proto_ptr)
     }
 
     /* If the offset or the offset + fragment length overflows the
-       reassembly buffer, we discard the entire packet. */
+       reassembly buffer, we discard the entire packet. The fragment is
+       copied to FBUF + UIP_IPH_LEN + uip_ext_len + offset, so the
+       unfragmentable part (UIP_IPH_LEN + uip_ext_len) must be included in
+       the bound; otherwise a fragment with offset + len close to
+       UIP_REASS_BUFSIZE would write up to UIP_IPH_LEN + uip_ext_len bytes
+       past the end of uip_reassbuf[]. */
     if(offset > UIP_REASS_BUFSIZE ||
-       offset + len > UIP_REASS_BUFSIZE) {
+       UIP_IPH_LEN + uip_ext_len + offset + len > UIP_REASS_BUFSIZE) {
       uip_reass_on = 0;
       etimer_stop(&uip_reass_timer);
       return 0;
@@ -872,7 +1066,7 @@ ext_hdr_options_process(uint8_t *ext_buf)
       *  we want to process the option and not revert to the default case.
       */
       LOG_DBG("Processing MPL option\n");
-      opt_offset += opt_len + opt_len;
+      opt_offset += opt_len;
       break;
 #endif
     default:
@@ -1035,15 +1229,6 @@ uip_process(uint8_t flag)
     uipbuf_clear();
     uip_slen = 0;
 
-    /* Increase the initial sequence number. */
-    if(++iss[3] == 0) {
-      if(++iss[2] == 0) {
-        if(++iss[1] == 0) {
-          ++iss[0];
-        }
-      }
-    }
-
     /*
      * Check if the connection is in a state in which we simply wait
      * for the connection to time out. If so, we increase the
@@ -1186,7 +1371,7 @@ uip_process(uint8_t flag)
    * packet header, the packet has been padded, and we set uip_len to
    * the correct value.
    */
-  if(uip_len < uipbuf_get_len_field(UIP_IP_BUF)) {
+  if(uipbuf_get_len_field(UIP_IP_BUF) > uip_len - UIP_IPH_LEN) {
     UIP_STAT(++uip_stat.ip.drop);
     LOG_ERR("packet shorter than reported in IP header\n");
     goto drop;
@@ -1812,10 +1997,11 @@ uip_process(uint8_t flag)
   uip_ipaddr_copy(&uip_connr->ripaddr, &UIP_IP_BUF->srcipaddr);
   uip_connr->tcpstateflags = UIP_SYN_RCVD;
 
-  uip_connr->snd_nxt[0] = iss[0];
-  uip_connr->snd_nxt[1] = iss[1];
-  uip_connr->snd_nxt[2] = iss[2];
-  uip_connr->snd_nxt[3] = iss[3];
+  /*
+   * The local address is the destination of the incoming SYN, still
+   * present in the buffer before the source/destination swap.
+   */
+  generate_isn(uip_connr->snd_nxt, &UIP_IP_BUF->destipaddr, uip_connr);
   uip_connr->len = 1;
 
   /* rcv_nxt should be the seqno from the incoming packet + 1. */
@@ -1882,31 +2068,72 @@ uip_process(uint8_t flag)
      c) and the length of the IP header (20 bytes). */
   uip_len = uip_len - c - UIP_IPH_LEN;
 
-  /* First, check if the sequence number of the incoming packet is
-     what we're expecting next. If not, we send out an ACK with the
-     correct numbers in, unless we are in the SYN_RCVD state and
-     receive a SYN, in which case we should retransmit our SYNACK
-     (which is done futher down). */
+  /*
+   * Accept segments within the receive window and handle overlapping data.
+   *
+   * Out-of-order segments are dropped and an ACK is sent to trigger
+   * retransmission.
+   */
   if(!((((uip_connr->tcpstateflags & UIP_TS_MASK) == UIP_SYN_SENT) &&
         ((UIP_TCP_BUF->flags & TCP_CTL) == (TCP_SYN | TCP_ACK))) ||
        (((uip_connr->tcpstateflags & UIP_TS_MASK) == UIP_SYN_RCVD) &&
         ((UIP_TCP_BUF->flags & TCP_CTL) == TCP_SYN)))) {
-    if((uip_len > 0 || ((UIP_TCP_BUF->flags & (TCP_SYN | TCP_FIN)) != 0)) &&
-       (UIP_TCP_BUF->seqno[0] != uip_connr->rcv_nxt[0] ||
-        UIP_TCP_BUF->seqno[1] != uip_connr->rcv_nxt[1] ||
-        UIP_TCP_BUF->seqno[2] != uip_connr->rcv_nxt[2] ||
-        UIP_TCP_BUF->seqno[3] != uip_connr->rcv_nxt[3])) {
+    if((uip_len > 0 || ((UIP_TCP_BUF->flags & (TCP_SYN | TCP_FIN)) != 0))) {
 
-      if((UIP_TCP_BUF->flags & TCP_SYN)) {
-        if((uip_connr->tcpstateflags & UIP_TS_MASK) == UIP_SYN_RCVD) {
-          goto tcp_send_synack;
-#if UIP_ACTIVE_OPEN
-        } else if((uip_connr->tcpstateflags & UIP_TS_MASK) == UIP_SYN_SENT) {
-          goto tcp_send_syn;
-#endif
-        }
+      /* Compute effective segment length: FIN occupies one sequence number */
+      uint16_t eff_seg_len = uip_len;
+      if(UIP_TCP_BUF->flags & TCP_FIN) {
+        eff_seg_len++;
       }
-      goto tcp_send_ack;
+
+      /* Check segment acceptability per RFC 9293 Table 6 */
+      if(!seg_in_window(UIP_TCP_BUF->seqno, eff_seg_len,
+                        uip_connr->rcv_nxt, UIP_RECEIVE_WINDOW)) {
+        /* Segment outside receive window - send ACK and drop */
+        if((UIP_TCP_BUF->flags & TCP_SYN)) {
+          if((uip_connr->tcpstateflags & UIP_TS_MASK) == UIP_SYN_RCVD) {
+            goto tcp_send_synack;
+#if UIP_ACTIVE_OPEN
+          } else if((uip_connr->tcpstateflags & UIP_TS_MASK) == UIP_SYN_SENT) {
+            goto tcp_send_syn;
+#endif
+          }
+        }
+        goto tcp_send_ack;
+      }
+
+      /* Handle overlapping segments by trimming to new data only.
+         Use signed comparison for correct wraparound handling. */
+      uint32_t seg_seq = seq_to_uint32(UIP_TCP_BUF->seqno);
+      uint32_t expected_seq = seq_to_uint32(uip_connr->rcv_nxt);
+      int32_t seq_diff = (int32_t)(seg_seq - expected_seq);
+
+      if(seq_diff < 0) {
+        /* Overlapping segment - trim already received data */
+        uint32_t overlap = (uint32_t)(-seq_diff);
+        if(overlap >= uip_len) {
+          /* Entire segment is old data - just ACK */
+          goto tcp_send_ack;
+        }
+
+        LOG_DBG("TCP: trimming %lu bytes of overlap from segment\n",
+                (unsigned long)overlap);
+
+        /* Trim the overlapping portion */
+        uip_len -= overlap;
+        uip_appdata += overlap;
+        /* Update packet sequence number to reflect trimmed segment */
+        UIP_TCP_BUF->seqno[0] = (expected_seq >> 24) & 0xff;
+        UIP_TCP_BUF->seqno[1] = (expected_seq >> 16) & 0xff;
+        UIP_TCP_BUF->seqno[2] = (expected_seq >> 8) & 0xff;
+        UIP_TCP_BUF->seqno[3] = expected_seq & 0xff;
+      } else if(seq_diff > 0) {
+        /* Out-of-order segment: send ACK to trigger retransmission */
+        LOG_DBG("TCP: out-of-order segment (gap of %lu bytes), sending ACK\n",
+                (unsigned long)(uint32_t)seq_diff);
+        goto tcp_send_ack;
+      }
+      /* If seg_seq == expected_seq, process normally */
     }
   }
 

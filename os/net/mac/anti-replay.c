@@ -31,6 +31,9 @@
  */
 
 /**
+ * \addtogroup llsec802154
+ * @{
+ *
  * \file
  *         Protects against replay attacks by comparing with the last
  *         unicast or broadcast frame counter of the sender.
@@ -38,13 +41,9 @@
  *         Konrad Krentz <konrad.krentz@gmail.com>
  */
 
-/**
- * \addtogroup llsec802154
- * @{
- */
-
 #include "net/mac/anti-replay.h"
 #include "net/packetbuf.h"
+#include "net/mac/framer/frame802154.h"
 #include "net/mac/llsec802154.h"
 
 #if LLSEC802154_USES_FRAME_COUNTER

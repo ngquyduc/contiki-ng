@@ -52,6 +52,14 @@
 #error "CPU_DEF_PATH undefined"
 #endif /* BOARD_CONF_PATH */
 /*---------------------------------------------------------------------------*/
+/*
+ * The nRF cores run at 64 MHz unless the CPU header says otherwise, see
+ * os/sys/cycles.h.
+ */
+#ifndef CYCLES_CONF_HZ
+#define CYCLES_CONF_HZ 64000000
+#endif /* CYCLES_CONF_HZ */
+/*---------------------------------------------------------------------------*/
 /* Path to headers with implementation of mutexes, atomic and memory barriers */
 #define MUTEX_CONF_ARCH_HEADER_PATH          "mutex-cortex.h"
 #define ATOMIC_CONF_ARCH_HEADER_PATH         "atomic-cortex.h"
@@ -74,8 +82,21 @@
 #define RADIO_PHY_OVERHEAD            3
 #define RADIO_BYTE_AIR_TIME          32
 #define RADIO_SHR_LEN                 5 /* Synch word + SFD */
+/*
+ * Delay between the moment TSCH releases transmit() and the RMARKER, that is
+ * the first symbol of the PHR, on air. Two terms:
+ *
+ * - the SHR, RADIO_SHR_LEN * RADIO_BYTE_AIR_TIME = 160 us;
+ * - the launch latency of the driver: the rtimer wake-up, TASKS_TXEN issued
+ *   from RXIDLE, TXRU, and the start of the modulator. Measured at 27.3 us.
+ *
+ * See RADIO_RX_FRAMESTART_DELAY_USEC in net/nrf-ieee-driver-arch.c for the
+ * measurement method.
+ */
+#define RADIO_TX_LAUNCH_LATENCY_USEC 27
 #define RADIO_DELAY_BEFORE_TX \
-  ((unsigned)US_TO_RTIMERTICKS(RADIO_SHR_LEN * RADIO_BYTE_AIR_TIME))
+  ((unsigned)US_TO_RTIMERTICKS(RADIO_SHR_LEN * RADIO_BYTE_AIR_TIME + \
+                               RADIO_TX_LAUNCH_LATENCY_USEC))
 #define RADIO_DELAY_BEFORE_RX         ((unsigned)US_TO_RTIMERTICKS(250))
 #define RADIO_DELAY_BEFORE_DETECT     0
 /*---------------------------------------------------------------------------*/
@@ -83,6 +104,15 @@
 /*---------------------------------------------------------------------------*/
 #define GPIO_HAL_CONF_ARCH_HDR_PATH          "gpio-hal-arch.h"
 #define GPIO_HAL_CONF_ARCH_SW_TOGGLE         0
+/*---------------------------------------------------------------------------*/
+/*
+ * NRF_SPI_CONF_CONTROLLER_COUNT is defined by Makefile.nrf unless the build
+ * sets NRF_WITH_SPI=0, in which case the SPI HAL compiles out entirely.
+ */
+#ifdef NRF_SPI_CONF_CONTROLLER_COUNT
+#define SPI_CONF_CONTROLLER_COUNT NRF_SPI_CONF_CONTROLLER_COUNT
+#define SPI_HAL_CONF_ARCH_HDR_PATH "spi-arch.h"
+#endif /* NRF_SPI_CONF_CONTROLLER_COUNT */
 /*---------------------------------------------------------------------------*/
 #ifndef TSCH_CONF_HW_FRAME_FILTERING
 #define TSCH_CONF_HW_FRAME_FILTERING  0
@@ -100,7 +130,9 @@
 #define TSCH_CONF_TIMESYNC_REMOVE_JITTER 0
 #endif /* TSCH_CONF_TIMESYNC_REMOVE_JITTER */
 /*---------------------------------------------------------------------------*/
+#ifndef CSMA_CONF_SEND_SOFT_ACK
 #define CSMA_CONF_SEND_SOFT_ACK       1
+#endif /* CSMA_CONF_SEND_SOFT_ACK */
 /*---------------------------------------------------------------------------*/
 #endif /* NRF_DEF_H_ */
 /*---------------------------------------------------------------------------*/

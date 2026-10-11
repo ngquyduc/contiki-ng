@@ -32,6 +32,7 @@
 #include "unit-test.h"
 #include "lib/sha-256.h"
 #include "lib/hexconv.h"
+#include "sys/cc.h"
 #include <stddef.h>
 #include <string.h>
 #include <stdio.h>
@@ -48,108 +49,127 @@ static const struct {
       "abc",
       NULL,
       NULL
-    }, {
+    },
+    {
       0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
       0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
       0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c,
       0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad
     }
-  }, { /* Simple */
+  },
+  { /* Simple */
     {
       "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
       NULL,
       NULL,
-    }, {
+    },
+    {
       0x24, 0x8d, 0x6a, 0x61, 0xd2, 0x06, 0x38, 0xb8,
       0xe5, 0xc0, 0x26, 0x93, 0x0c, 0x3e, 0x60, 0x39,
       0xa3, 0x3c, 0xe4, 0x59, 0x64, 0xff, 0x21, 0x67,
       0xf6, 0xec, 0xed, 0xd4, 0x19, 0xdb, 0x06, 0xc1
     }
-  }, { /* Message of length 130 */
+  },
+  { /* Message of length 130 */
     {
       "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklabcd"
       "efghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmn",
       NULL,
       NULL
-    }, {
+    },
+    {
       0x15, 0xd2, 0x3e, 0xea, 0x57, 0xb3, 0xd4, 0x61,
       0xbf, 0x38, 0x91, 0x12, 0xab, 0x4c, 0x43, 0xce,
       0x85, 0xe1, 0x68, 0x23, 0x8a, 0xaa, 0x54, 0x8e,
       0xc8, 0x6f, 0x0c, 0x9d, 0x65, 0xf9, 0xb9, 0x23
     }
-  }, { /* Message of length 128 */
+  },
+  { /* Message of length 128 */
     {
       "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklabcd"
       "efghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl",
       NULL,
       NULL
-    }, {
+    },
+    {
       0xf8, 0xa3, 0xf2, 0x26, 0xfc, 0x42, 0x10, 0xe9,
       0x0d, 0x13, 0x0c, 0x7f, 0x41, 0xf2, 0xbe, 0x66,
       0x45, 0x53, 0x85, 0xd2, 0x92, 0x0a, 0xda, 0x78,
       0x15, 0xf8, 0xf7, 0x95, 0xd9, 0x44, 0x90, 0x5f
     }
-  }, { /* Message of length 64 */
+  },
+  { /* Message of length 64 */
     {
       "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl",
       NULL,
       NULL
-    }, {
+    },
+    {
       0x2f, 0xcd, 0x5a, 0x0d, 0x60, 0xe4, 0xc9, 0x41,
       0x38, 0x1f, 0xcc, 0x4e, 0x00, 0xa4, 0xbf, 0x8b,
       0xe4, 0x22, 0xc3, 0xdd, 0xfa, 0xfb, 0x93, 0xc8,
       0x09, 0xe8, 0xd1, 0xe2, 0xbf, 0xff, 0xae, 0x8e
     }
-  }, { /* Message of length 66 */
+  },
+  { /* Message of length 66 */
     {
       "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmn",
       NULL,
       NULL
-    }, {
+    },
+    {
       0x92, 0x90, 0x1c, 0x85, 0x82, 0xe3, 0x1c, 0x05,
       0x69, 0xb5, 0x36, 0x26, 0x9c, 0xe2, 0x2c, 0xc8,
       0x30, 0x8b, 0xa4, 0x17, 0xab, 0x36, 0xc1, 0xbb,
       0xaf, 0x08, 0x4f, 0xf5, 0x8b, 0x18, 0xdc, 0x6a
     }
-  }, {
+  },
+  {
     {
       "abcdbcdecdefde",
       "fgefghfghighijhijkijkljklmklmnlmnomnopnopq",
       NULL
-    }, {
+    },
+    {
       0x24, 0x8d, 0x6a, 0x61, 0xd2, 0x06, 0x38, 0xb8,
       0xe5, 0xc0, 0x26, 0x93, 0x0c, 0x3e, 0x60, 0x39,
       0xa3, 0x3c, 0xe4, 0x59, 0x64, 0xff, 0x21, 0x67,
       0xf6, 0xec, 0xed, 0xd4, 0x19, 0xdb, 0x06, 0xc1
     }
-  }, {
+  },
+  {
     {
       "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl",
       "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl",
       NULL
-    }, {
+    },
+    {
       0xf8, 0xa3, 0xf2, 0x26, 0xfc, 0x42, 0x10, 0xe9,
       0x0d, 0x13, 0x0c, 0x7f, 0x41, 0xf2, 0xbe, 0x66,
       0x45, 0x53, 0x85, 0xd2, 0x92, 0x0a, 0xda, 0x78,
       0x15, 0xf8, 0xf7, 0x95, 0xd9, 0x44, 0x90, 0x5f
     }
-  }, {
+  },
+  {
     {
       "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefgh",
       "ijkl",
       "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl"
-    }, {
+    },
+    {
       0xf8, 0xa3, 0xf2, 0x26, 0xfc, 0x42, 0x10, 0xe9,
       0x0d, 0x13, 0x0c, 0x7f, 0x41, 0xf2, 0xbe, 0x66,
       0x45, 0x53, 0x85, 0xd2, 0x92, 0x0a, 0xda, 0x78,
       0x15, 0xf8, 0xf7, 0x95, 0xd9, 0x44, 0x90, 0x5f
     }
-  }, { /* empty string */
+  },
+  { /* empty string */
     {
       "",
       NULL,
       NULL
-    }, {
+    },
+    {
       0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14,
       0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
       0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c,
@@ -180,6 +200,48 @@ static const struct {
       0x5c, 0xa8, 0xaf, 0xce, 0xaf, 0x0b, 0xf1, 0x2b,
       0x88, 0x1d, 0xc2, 0x00, 0xc9, 0x83, 0x3d, 0xa7,
       0x26, 0xe9, 0x37, 0x6c, 0x2e, 0x32, 0xcf, 0xf7
+    }
+  },
+  {
+    {
+      0x4a, 0x65, 0x66, 0x65,
+    },
+    4,
+    {
+      0x77, 0x68, 0x61, 0x74, 0x20, 0x64, 0x6f, 0x20,
+      0x79, 0x61, 0x20, 0x77, 0x61, 0x6e, 0x74, 0x20,
+      0x66, 0x6f, 0x72, 0x20, 0x6e, 0x6f, 0x74, 0x68,
+      0x69, 0x6e, 0x67, 0x3f
+    },
+    28,
+    {
+      0x5b, 0xdc, 0xc1, 0x46, 0xbf, 0x60, 0x75, 0x4e,
+      0x6a, 0x04, 0x24, 0x26, 0x08, 0x95, 0x75, 0xc7,
+      0x5a, 0x00, 0x3f, 0x08, 0x9d, 0x27, 0x39, 0x83,
+      0x9d, 0xec, 0x58, 0xb9, 0x64, 0xec, 0x38, 0x43
+    }
+  },
+  {
+    {
+      0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+      0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA
+    },
+    16,
+    {
+      0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD,
+      0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD,
+      0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD,
+      0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD,
+      0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD,
+      0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD, 0xDD,
+      0xDD, 0xDD
+    },
+    50,
+    {
+      0x7d, 0xda, 0x3c, 0xc1, 0x69, 0x74, 0x3a, 0x64,
+      0x84, 0x64, 0x9f, 0x94, 0xf0, 0xed, 0xa0, 0xf9,
+      0xf2, 0xff, 0x49, 0x6a, 0x97, 0x33, 0xfb, 0x79,
+      0x6e, 0xd5, 0xad, 0xb4, 0x0a, 0x44, 0xc3, 0xc1
     }
   }
 };
@@ -323,11 +385,9 @@ UNIT_TEST(sha_256_hash_stepwise)
 {
   UNIT_TEST_BEGIN();
 
-  for(size_t i = 0; i < sizeof(hashes) / sizeof(hashes[0]); i++) {
+  for(size_t i = 0; i < CC_ARRAY_LENGTH(hashes); i++) {
     SHA_256.init();
-    for(size_t j = 0;
-        j < sizeof(hashes[i].data) / sizeof(hashes[i].data[0]);
-        j++) {
+    for(size_t j = 0; j < CC_ARRAY_LENGTH(hashes[i].data); j++) {
       if(!hashes[i].data[j]) {
         continue;
       }
@@ -347,21 +407,20 @@ UNIT_TEST(sha_256_hash_with_checkpoint)
 {
   UNIT_TEST_BEGIN();
 
-  for(size_t i = 0; i < sizeof(hashes) / sizeof(hashes[0]); i++) {
+  for(size_t i = 0; i < CC_ARRAY_LENGTH(hashes); i++) {
     SHA_256.init();
     sha_256_checkpoint_t checkpoint;
     SHA_256.create_checkpoint(&checkpoint);
-    for(size_t j = 0;
-        j < sizeof(hashes[i].data) / sizeof(hashes[i].data[0]);
-        j++) {
-      SHA_256.restore_checkpoint(&checkpoint);
+    for(size_t j = 0; j < CC_ARRAY_LENGTH(hashes[i].data); j++) {
       if(!hashes[i].data[j]) {
         continue;
       }
+      SHA_256.restore_checkpoint(&checkpoint);
       SHA_256.update((const uint8_t *)hashes[i].data[j],
                      strlen(hashes[i].data[j]));
       SHA_256.create_checkpoint(&checkpoint);
     }
+    SHA_256.restore_checkpoint(&checkpoint);
     uint8_t sha256[SHA_256_DIGEST_LENGTH];
     SHA_256.finalize(sha256);
     UNIT_TEST_ASSERT(!memcmp(sha256, hashes[i].hash, sizeof(sha256)));
@@ -375,12 +434,10 @@ UNIT_TEST(sha_256_hash_shorthand)
 {
   UNIT_TEST_BEGIN();
 
-  for(size_t i = 0; i < sizeof(hashes) / sizeof(hashes[0]); i++) {
+  for(size_t i = 0; i < CC_ARRAY_LENGTH(hashes); i++) {
     uint8_t buf[256];
     size_t buf_len = 0;
-    for(size_t j = 0;
-        j < sizeof(hashes[i].data) / sizeof(hashes[i].data[0]);
-        j++) {
+    for(size_t j = 0; j < CC_ARRAY_LENGTH(hashes[i].data); j++) {
       if(!hashes[i].data[j]) {
         continue;
       }
@@ -400,7 +457,7 @@ UNIT_TEST(sha_256_hmac)
 {
   UNIT_TEST_BEGIN();
 
-  for(size_t i = 0; i < sizeof(hmacs) / sizeof(hmacs[0]); i++) {
+  for(size_t i = 0; i < CC_ARRAY_LENGTH(hmacs); i++) {
     uint8_t hmac[SHA_256_DIGEST_LENGTH];
     sha_256_hmac((uint8_t *)hmacs[i].key, hmacs[i].keylen,
                  hmacs[i].data, hmacs[i].datalen,
@@ -411,12 +468,82 @@ UNIT_TEST(sha_256_hmac)
   UNIT_TEST_END();
 }
 /*---------------------------------------------------------------------------*/
+UNIT_TEST_REGISTER(sha_256_hmac_stepwise, "Stepwise SHA-256 HMAC");
+UNIT_TEST(sha_256_hmac_stepwise)
+{
+  UNIT_TEST_BEGIN();
+
+  for(size_t i = 0; i < CC_ARRAY_LENGTH(hmacs); i++) {
+    uint8_t hmac[SHA_256_DIGEST_LENGTH];
+    sha_256_hmac_init(hmacs[i].key, hmacs[i].keylen);
+    sha_256_hmac_update(hmacs[i].data, hmacs[i].datalen / 2);
+    sha_256_hmac_update(hmacs[i].data + hmacs[i].datalen / 2,
+                        hmacs[i].datalen - (hmacs[i].datalen / 2));
+    sha_256_hmac_finish(hmac);
+    UNIT_TEST_ASSERT(!memcmp(hmac, hmacs[i].hmac, sizeof(hmac)));
+  }
+
+  UNIT_TEST_END();
+}
+/*---------------------------------------------------------------------------*/
+UNIT_TEST_REGISTER(sha_256_hmac_checkpoint, "SHA-256 HMAC with checkpoint");
+UNIT_TEST(sha_256_hmac_checkpoint)
+{
+  UNIT_TEST_BEGIN();
+
+  for(size_t i = 0; i < CC_ARRAY_LENGTH(hmacs); i++) {
+    uint8_t hmac[SHA_256_DIGEST_LENGTH];
+    sha_256_hmac_init(hmacs[i].key, hmacs[i].keylen);
+    sha_256_hmac_update(hmacs[i].data, hmacs[i].datalen / 2);
+    sha_256_checkpoint_t checkpoint;
+    SHA_256.create_checkpoint(&checkpoint);
+    SHA_256.restore_checkpoint(&checkpoint);
+    sha_256_hmac_update(hmacs[i].data + hmacs[i].datalen / 2,
+                        hmacs[i].datalen - (hmacs[i].datalen / 2));
+    sha_256_hmac_finish(hmac);
+    UNIT_TEST_ASSERT(!memcmp(hmac, hmacs[i].hmac, sizeof(hmac)));
+  }
+
+  UNIT_TEST_END();
+}
+/*---------------------------------------------------------------------------*/
+UNIT_TEST_REGISTER(sha_256_hmac_interleaved, "Interleaved SHA-256 HMACs");
+UNIT_TEST(sha_256_hmac_interleaved)
+{
+  UNIT_TEST_BEGIN();
+
+  sha_256_hmac_init(hmacs[0].key, hmacs[0].keylen);
+  sha_256_hmac_update(hmacs[0].data, hmacs[0].datalen / 2);
+  sha_256_checkpoint_t checkpoint1;
+  SHA_256.create_checkpoint(&checkpoint1);
+
+  sha_256_hmac_init(hmacs[1].key, hmacs[1].keylen);
+  sha_256_hmac_update(hmacs[1].data, hmacs[1].datalen / 2);
+  sha_256_checkpoint_t checkpoint2;
+  SHA_256.create_checkpoint(&checkpoint2);
+
+  SHA_256.restore_checkpoint(&checkpoint1);
+  sha_256_hmac_update(hmacs[0].data + hmacs[0].datalen / 2,
+                      hmacs[0].datalen - (hmacs[0].datalen / 2));
+  uint8_t hmac[SHA_256_DIGEST_LENGTH];
+  sha_256_hmac_finish(hmac);
+  UNIT_TEST_ASSERT(!memcmp(hmac, hmacs[0].hmac, sizeof(hmac)));
+
+  SHA_256.restore_checkpoint(&checkpoint2);
+  sha_256_hmac_update(hmacs[1].data + hmacs[1].datalen / 2,
+                      hmacs[1].datalen - (hmacs[1].datalen / 2));
+  sha_256_hmac_finish(hmac);
+  UNIT_TEST_ASSERT(!memcmp(hmac, hmacs[1].hmac, sizeof(hmac)));
+
+  UNIT_TEST_END();
+}
+/*---------------------------------------------------------------------------*/
 UNIT_TEST_REGISTER(sha_256_hkdf, "SHA-256 HKDF");
 UNIT_TEST(sha_256_hkdf)
 {
   UNIT_TEST_BEGIN();
 
-  for(size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+  for(size_t i = 0; i < CC_ARRAY_LENGTH(keys); i++) {
     uint8_t prk[SHA_256_DIGEST_LENGTH];
     sha_256_hkdf_extract(keys[i].salt, keys[i].salt_len,
                          keys[i].ikm, keys[i].ikm_len,
@@ -426,6 +553,23 @@ UNIT_TEST(sha_256_hkdf)
     sha_256_hkdf_expand(prk, sizeof(prk),
                         keys[i].info, keys[i].info_len,
                         okm, keys[i].okm_len);
+    UNIT_TEST_ASSERT(!memcmp(okm, keys[i].okm, keys[i].okm_len));
+  }
+
+  UNIT_TEST_END();
+}
+/*---------------------------------------------------------------------------*/
+UNIT_TEST_REGISTER(sha_256_hkdf_shorthand, "SHA-256 HKDF shorthand");
+UNIT_TEST(sha_256_hkdf_shorthand)
+{
+  UNIT_TEST_BEGIN();
+
+  for(size_t i = 0; i < CC_ARRAY_LENGTH(keys); i++) {
+    uint8_t okm[128];
+    sha_256_hkdf(keys[i].salt, keys[i].salt_len,
+                 keys[i].ikm, keys[i].ikm_len,
+                 keys[i].info, keys[i].info_len,
+                 okm, keys[i].okm_len);
     UNIT_TEST_ASSERT(!memcmp(okm, keys[i].okm, keys[i].okm_len));
   }
 
@@ -443,13 +587,21 @@ PROCESS_THREAD(test_process, ev, data)
   UNIT_TEST_RUN(sha_256_hash_with_checkpoint);
   UNIT_TEST_RUN(sha_256_hash_shorthand);
   UNIT_TEST_RUN(sha_256_hmac);
+  UNIT_TEST_RUN(sha_256_hmac_stepwise);
+  UNIT_TEST_RUN(sha_256_hmac_checkpoint);
+  UNIT_TEST_RUN(sha_256_hmac_interleaved);
   UNIT_TEST_RUN(sha_256_hkdf);
+  UNIT_TEST_RUN(sha_256_hkdf_shorthand);
 
   if(!UNIT_TEST_PASSED(sha_256_hash_stepwise)
      || !UNIT_TEST_PASSED(sha_256_hash_with_checkpoint)
      || !UNIT_TEST_PASSED(sha_256_hash_shorthand)
      || !UNIT_TEST_PASSED(sha_256_hmac)
-     || !UNIT_TEST_PASSED(sha_256_hkdf)) {
+     || !UNIT_TEST_PASSED(sha_256_hmac_stepwise)
+     || !UNIT_TEST_PASSED(sha_256_hmac_checkpoint)
+     || !UNIT_TEST_PASSED(sha_256_hmac_interleaved)
+     || !UNIT_TEST_PASSED(sha_256_hkdf)
+     || !UNIT_TEST_PASSED(sha_256_hkdf_shorthand)) {
     printf("=check-me= FAILED\n");
     printf("---\n");
   }

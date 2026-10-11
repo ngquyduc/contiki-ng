@@ -128,6 +128,10 @@
 #define LOG_CONF_LEVEL_IPV6                        LOG_LEVEL_NONE
 #endif /* LOG_CONF_LEVEL_IPV6 */
 
+#ifndef LOG_CONF_LEVEL_NAT64
+#define LOG_CONF_LEVEL_NAT64                       LOG_LEVEL_NONE
+#endif /* LOG_CONF_LEVEL_NAT64 */
+
 #ifndef LOG_CONF_LEVEL_6LOWPAN
 #define LOG_CONF_LEVEL_6LOWPAN                     LOG_LEVEL_NONE
 #endif /* LOG_CONF_LEVEL_6LOWPAN */
@@ -171,6 +175,10 @@
 #ifndef LOG_CONF_LEVEL_SYS
 #define LOG_CONF_LEVEL_SYS                         LOG_LEVEL_NONE
 #endif /* LOG_CONF_LEVEL_SYS */
+
+#ifndef LOG_CONF_LEVEL_EDHOC
+#define LOG_CONF_LEVEL_EDHOC                       LOG_LEVEL_NONE
+#endif /* LOG_CONF_LEVEL_EDHOC */
 
 #endif /* LOG_CONF_H_ */
 

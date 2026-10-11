@@ -51,7 +51,6 @@
 #include "dev/crypto.h"
 #include "dev/button-hal.h"
 #include "usb/usb-serial.h"
-#include "lib/random.h"
 #include "lib/sensors.h"
 #include "net/netstack.h"
 #include "net/mac/framer/frame802154.h"
@@ -136,13 +135,14 @@ platform_init_stage_two()
   usb_serial_set_input(serial_line_input_byte);
 #endif
 
+  LOG_INFO("%s\n", BOARD_STRING);
+
   i2c_init(I2C_SDA_PORT, I2C_SDA_PIN, I2C_SCL_PORT, I2C_SCL_PIN, I2C_SCL_NORMAL_BUS_SPEED);
 
   serial_line_init();
 
-  /* Initialise the H/W RNG engine. */
-  random_init(0);
-
+  board_init();
+  
   udma_init();
 
 #if CRYPTO_CONF_INIT
@@ -163,11 +163,7 @@ platform_init_stage_two()
 void
 platform_init_stage_three()
 {
-  LOG_INFO("%s\n", BOARD_STRING);
-
   set_rf_params();
-
-  board_init();
 
   soc_print_info();
 

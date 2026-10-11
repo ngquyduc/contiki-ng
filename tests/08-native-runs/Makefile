@@ -19,6 +19,24 @@ tests/08-native-runs/12-heapmem/native:./12-heapmem.sh:DEFINES=HEAPMEM_DEBUG=0 \
 tests/08-native-runs/12-heapmem/native:./12-heapmem.sh:DEFINES=HEAPMEM_DEBUG=1 \
 tests/08-native-runs/13-coffee/native:./13-coffee.sh \
 tests/08-native-runs/14-sha-256/native:./14-sha-256.sh \
-tests/08-native-runs/15-ieee802154-security/native:./15-ieee802154-security.sh
+tests/08-native-runs/15-ieee802154-security/native:./15-ieee802154-security.sh \
+tests/08-native-runs/16-cbor/native:./16-cbor.sh \
+tests/08-native-runs/17-process-mutex/native:./17-process-mutex.sh \
+tests/08-native-runs/18-ecc/native:./18-ecc.sh \
+tests/08-native-runs/19-bitrev/native:./19-bitrev-test.sh \
+tests/08-native-runs/20-random/native:./20-random.sh \
+tests/08-native-runs/21-coffee-validation/native:./21-coffee-validation.sh \
+tests/08-native-runs/23-uiplib/native:./23-uiplib.sh \
+tests/08-native-runs/21-dbg-io/native:./21-dbg-io.sh \
+tests/08-native-runs/24-antelope/native:./24-antelope.sh \
+tests/08-native-runs/25-mqtt-prop/native:./25-mqtt-prop.sh \
+tests/08-native-runs/26-ip64/native:./26-ip64.sh \
+tests/08-native-runs/27-ip64-tap/native:./27-ip64-tap.sh \
+tests/08-native-runs/27-ip64-tap/native:./27-ip64-tap.sh:DEFINES=IP64_CONF_DHCP=1 \
+tests/08-native-runs/28-coap-parse/native:./28-coap-parse.sh \
+tests/08-native-runs/29-jsonparse/native:./29-jsonparse.sh \
+tests/08-native-runs/30-cycles/native:./30-cycles.sh \
+tests/08-native-runs/31-coap-link-format/native:./31-coap-link-format.sh \
+tests/08-native-runs/32-lwm2m-tlv/native:./32-lwm2m-tlv.sh \
 
 include ../Makefile.compile-test

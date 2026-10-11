@@ -52,6 +52,7 @@
 #include "net/ipv6/multicast/uip-mcast6.h"
 #include "lib/list.h"
 #include "lib/memb.h"
+#include "sys/cc.h"
 #include "sys/ctimer.h"
 #include "sys/log.h"
 
@@ -363,8 +364,20 @@ rpl_set_root(uint8_t instance_id, uip_ipaddr_t *dag_id)
 {
   rpl_dag_t *dag;
   rpl_instance_t *instance;
+  rpl_of_t *of;
   uint8_t version;
   int i;
+
+  /*
+   * Look the objective function up before anything is allocated or
+   * dropped, so that an unsupported one cannot leave a half-built
+   * instance behind.
+   */
+  of = rpl_find_of(RPL_OF_OCP);
+  if(of == NULL) {
+    LOG_WARN("OF with OCP %u not supported\n", RPL_OF_OCP);
+    return NULL;
+  }
 
   version = RPL_LOLLIPOP_INIT;
   instance = rpl_get_instance(instance_id);
@@ -402,11 +415,7 @@ rpl_set_root(uint8_t instance_id, uip_ipaddr_t *dag_id)
   dag->grounded = RPL_GROUNDED;
   dag->preference = RPL_PREFERENCE;
   instance->mop = RPL_MOP_DEFAULT;
-  instance->of = rpl_find_of(RPL_OF_OCP);
-  if(instance->of == NULL) {
-    LOG_WARN("OF with OCP %u not supported\n", RPL_OF_OCP);
-    return NULL;
-  }
+  instance->of = of;
 
   rpl_set_preferred_parent(dag, NULL);
 
@@ -1108,9 +1117,7 @@ rpl_get_instance(uint8_t instance_id)
 rpl_of_t *
 rpl_find_of(rpl_ocp_t ocp)
 {
-  for(unsigned i = 0;
-      i < sizeof(objective_functions) / sizeof(objective_functions[0]);
-      i++) {
+  for(unsigned i = 0; i < CC_ARRAY_LENGTH(objective_functions); i++) {
     if(objective_functions[i]->ocp == ocp) {
       return objective_functions[i];
     }
@@ -1157,7 +1164,7 @@ rpl_join_instance(uip_ipaddr_t *from, rpl_dio_t *dio)
   LOG_DBG_(" as a parent: ");
   if(p == NULL) {
     LOG_DBG_("failed\n");
-    instance->used = 0;
+    rpl_free_instance(instance);
     return;
   }
   p->dtsn = dio->dtsn;

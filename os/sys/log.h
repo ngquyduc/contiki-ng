@@ -109,6 +109,7 @@ struct log_module {
 extern int curr_log_level_rpl;
 extern int curr_log_level_tcpip;
 extern int curr_log_level_ipv6;
+extern int curr_log_level_nat64;
 extern int curr_log_level_6lowpan;
 extern int curr_log_level_nullnet;
 extern int curr_log_level_mac;
@@ -120,12 +121,14 @@ extern int curr_log_level_snmp;
 extern int curr_log_level_lwm2m;
 extern int curr_log_level_sys;
 extern int curr_log_level_main;
+extern int curr_log_level_edhoc;
 
 extern struct log_module all_modules[];
 
 #define LOG_LEVEL_RPL                         MIN((LOG_CONF_LEVEL_RPL), curr_log_level_rpl)
 #define LOG_LEVEL_TCPIP                       MIN((LOG_CONF_LEVEL_TCPIP), curr_log_level_tcpip)
 #define LOG_LEVEL_IPV6                        MIN((LOG_CONF_LEVEL_IPV6), curr_log_level_ipv6)
+#define LOG_LEVEL_NAT64                       MIN((LOG_CONF_LEVEL_NAT64), curr_log_level_nat64)
 #define LOG_LEVEL_6LOWPAN                     MIN((LOG_CONF_LEVEL_6LOWPAN), curr_log_level_6lowpan)
 #define LOG_LEVEL_NULLNET                     MIN((LOG_CONF_LEVEL_NULLNET), curr_log_level_nullnet)
 #define LOG_LEVEL_MAC                         MIN((LOG_CONF_LEVEL_MAC), curr_log_level_mac)
@@ -137,6 +140,7 @@ extern struct log_module all_modules[];
 #define LOG_LEVEL_LWM2M                       MIN((LOG_CONF_LEVEL_LWM2M), curr_log_level_lwm2m)
 #define LOG_LEVEL_SYS                         MIN((LOG_CONF_LEVEL_SYS), curr_log_level_sys)
 #define LOG_LEVEL_MAIN                        MIN((LOG_CONF_LEVEL_MAIN), curr_log_level_main)
+#define LOG_LEVEL_EDHOC                       MIN((LOG_CONF_LEVEL_EDHOC), curr_log_level_edhoc)
 
 /* Main log function */
 

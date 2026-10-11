@@ -44,10 +44,49 @@
 #ifndef NRF5340_APPLICATION_DEF_H_
 #define NRF5340_APPLICATION_DEF_H_
 /*---------------------------------------------------------------------------*/
+#ifndef NETSTACK_CONF_RADIO
+#if NRF_TRUSTZONE_NONSECURE
+#define NETSTACK_CONF_RADIO        tz_radio_driver
+#elif NRF_TRUSTZONE_SECURE
+/*
+ * The secure world uses nullradio as its NETSTACK_RADIO because the
+ * IPC radio is initialized later via the tz_radio_init() NSC call
+ * from the normal world.  Initializing the IPC radio during the
+ * secure world boot (before SPU configuration) causes SRAM bus
+ * stalls that hang the system.  The tz-radio.c NSC entry points
+ * call ipc_radio_driver functions directly, so filtering still
+ * works regardless of what NETSTACK_CONF_RADIO is set to here.
+ */
 #define NETSTACK_CONF_RADIO        nullradio_driver
+#else
+#define NETSTACK_CONF_RADIO        ipc_radio_driver
+#endif
+#endif
+/*---------------------------------------------------------------------------*/
+/*
+ * The network core acknowledges received frames itself: the IPC MAC sends
+ * a software ACK, or nrf_802154 auto-acknowledges when built with
+ * NRF_802154=1. A CSMA software ACK relayed over IPC would be a second,
+ * late ACK for the same frame, and CSMA's attempt to disable the radio's
+ * auto-ACK would switch off the nrf_802154 one.
+ */
+#ifndef CSMA_CONF_SEND_SOFT_ACK
+#define CSMA_CONF_SEND_SOFT_ACK    0
+#endif /* CSMA_CONF_SEND_SOFT_ACK */
 /*---------------------------------------------------------------------------*/
 #define NRF_HAS_USB     1
 #define NRF_HAS_UARTE   1
+/*---------------------------------------------------------------------------*/
+/*
+ * This core is the one whose rate is not fixed: SystemCoreClock is
+ * 128 MHz shifted right by HFCLKCTRL.HCLK. SystemInit() leaves HFCLKCTRL
+ * at Div2 as the errata 42 workaround, so a stock boot runs at 64 MHz.
+ * An application that selects 128 MHz has to override this, or readings
+ * come out half of what they should be. See os/sys/cycles.h.
+ */
+#ifndef CYCLES_CONF_HZ
+#define CYCLES_CONF_HZ 64000000
+#endif /* CYCLES_CONF_HZ */
 /*---------------------------------------------------------------------------*/
 #endif /* NRF5340_APPLICATION_DEF_H_ */
 /*---------------------------------------------------------------------------*/
